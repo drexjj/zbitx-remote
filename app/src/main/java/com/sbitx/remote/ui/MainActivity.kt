@@ -77,22 +77,23 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun AppRoot(service: RadioService?) {
-    val client = service?.client
+    val client = service?.client?.collectAsState()?.value
     val state = client?.state?.collectAsState()?.value ?: SbitxClient.ConnState.DISCONNECTED
 
     if (state == SbitxClient.ConnState.CONNECTED && client != null && service != null) {
         RadioPanel(client, service)
     } else {
-        ConnectScreen(service, state)
+        ConnectScreen(service, state, client)
     }
 }
 
 @Composable
-fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState) {
-    var host by remember { mutableStateOf("100.64.0.1") }   // your Tailscale IP / sbitx hostname
-    var port by remember { mutableStateOf("8080") }
+fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: SbitxClient?) {
+    var host by remember { mutableStateOf("sbitx.local") }
+    var port by remember { mutableStateOf("8443") }
     var pin by remember { mutableStateOf("") }
-    var useTls by remember { mutableStateOf(false) }
+    var useTls by remember { mutableStateOf(true) }
+    val lastError = client?.lastError?.collectAsState()?.value
 
     Column(
         Modifier.fillMaxSize().padding(24.dp),
@@ -127,6 +128,16 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState) {
             Spacer(Modifier.height(12.dp))
             Text("Login failed — check your PIN", color = MaterialTheme.colorScheme.error)
         }
+        if (state == SbitxClient.ConnState.ERROR) {
+            Spacer(Modifier.height(12.dp))
+            Text(
+                lastError ?: "Connection failed — check host/port and that you're on the same network or Tailscale",
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text("Status: $state", style = MaterialTheme.typography.bodySmall)
     }
 }
 
