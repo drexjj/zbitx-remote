@@ -13,7 +13,8 @@ Created by **VU3UBP** 🇮🇳
 - 🎙️ **Remote SSB voice** — hold-to-talk PTT streams your phone's microphone straight into the radio's TX chain
 - 🔊 **Live RX audio** — low-latency receiver audio with a jitter buffer tuned for mobile networks
 - 📶 **Frequency control** — direct entry, ±100 Hz / ±1 kHz nudge buttons, big monospace readout
-- 🎛️ **Full radio control** — mode (LSB/USB/CW/AM), band switching (80m–10m), mic gain, volume, drive (TX power), bandwidth, S-meter
+- 🎛️ **Full radio control** — mode (LSB/USB/CW/AM/FT8), band dropdown (80m–10m), tap-a-digit tuning with rotary knob, mic gain, volume, drive (TX power), bandwidth, S-meter
+- 📟 **FT8 operating panel** — live color-coded decodes streamed from the radio (decoding runs on the sBitx), tap a station to grab their call, one-tap standard messages (CQ with custom modifier like DX/POTA, Call, Report, RR73, 73)
 - 🌐 **Two connection profiles** — one tap to switch between your home LAN and Tailscale over the internet, with all settings remembered
 - 🔒 **TLS support** — works with the firmware's HTTPS (port 8443) out of the box, self-signed certificate included
 - 📱 **Background-safe** — a foreground service keeps the QSO alive when the screen turns off
@@ -43,6 +44,25 @@ On the radio, press **SET** and set/confirm the web access PIN. Verify the web U
 
 ### 3. Set up Tailscale on the sBitx
 
+**Easiest: the one-time setup script** (in `scripts/` of this repo). It installs Tailscale, joins your tailnet without any browser login on the radio, enables Tailscale SSH for remote recovery, survives reboots, and fixes WiFi power-save (a common cause of remote Pis dropping offline).
+
+1. Generate an auth key at `https://login.tailscale.com/admin/settings/keys` (single-use, tick "Pre-approved" if shown)
+2. Copy the script to the radio and run it:
+
+```bash
+# from your laptop, in this repo's folder:
+scp scripts/sbitx-remote-setup.sh pi@sbitx.local:/home/pi/
+
+ssh pi@sbitx.local
+sudo bash /home/pi/sbitx-remote-setup.sh tskey-auth-XXXXXXXXXXXX
+```
+
+3. Note the Tailscale IP it prints (`100.x.y.z`) — that goes in the app
+4. **Final step, once, from any browser:** `https://login.tailscale.com/admin/machines` → **sbitx** → ⋯ → **Disable key expiry**. This makes the setup permanent; without it the radio drops off the tailnet after ~180 days.
+
+<details>
+<summary>Manual setup (if you prefer doing it by hand)</summary>
+
 SSH into the radio's Raspberry Pi (or open a terminal on it directly):
 
 ```bash
@@ -69,6 +89,7 @@ Optional but recommended — make Tailscale start on every boot:
 ```bash
 sudo systemctl enable --now tailscaled
 ```
+</details>
 
 ### 4. Set up Tailscale on your phone
 Install the **Tailscale** app from the Play Store, sign in with the **same account**, and flip the VPN toggle on. You should see your sBitx listed as a device.
@@ -121,7 +142,8 @@ app/src/main/java/com/sbitx/remote/
 ## 🗺️ Roadmap
 
 - [ ] Spectrum / waterfall display
-- [ ] FT8 & CW text console with macros
+- [x] FT8 console with standard messages
+- [ ] CW keyboard console
 - [ ] Logbook viewer
 - [ ] Auto-reconnect with backoff
 - [ ] VFO A/B, RIT, split controls in UI
