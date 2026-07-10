@@ -95,7 +95,7 @@ sudo systemctl enable --now tailscaled
 Install the **Tailscale** app from the Play Store, sign in with the **same account**, and flip the VPN toggle on. You should see your sBitx listed as a device.
 
 ### 5. Install sBitx Remote
-Download the latest `sbitx-remote-debug.apk` from the [Releases](../../releases) page directly in your phone's browser and install it (allow "install unknown apps" if prompted).
+Download the latest `sbitx-remote.apk` from the [Releases](../../releases) page directly in your phone's browser and install it (allow "install unknown apps" if prompted).
 
 ### 6. Connect and operate
 - **At home:** choose **Local network**, enter the radio's LAN IP, port `8443`, TLS on, your PIN → Connect
@@ -156,12 +156,13 @@ This app stands on the shoulders of some remarkable open-source work:
 
 - **[Ashhar Farhan, VU2ESE](https://github.com/afarhan/sbitx)** — creator of the sBitx and the original open-source radio software that started it all. The sBitx's "hackable HF SDR" philosophy is what makes projects like this possible.
 - **[W9JES and the drexjj/sbitx team](https://github.com/drexjj/sbitx)** (KJ5DTK, KB2ML, and contributors) — for the outstanding 64-bit fork, and especially for adding browser-microphone SSB transmit in v5.0, the feature this entire app is built around.
-- **[HF Signals](https://www.hfsignals.com)** — for making real HF hardware affordable and open.
-- The **[Tailscale](https://tailscale.com)** team — for making secure networking genuinely effortless.
+- Inspired by the **Radioberry remote project by VU3ZOF**.
 
 ---
 
-## ⚖️ License & operating note
+## ⚖️ Disclaimer, license & operating note
+
+**⚠️ Use this app at your own risk.** This is experimental software under active testing. The author takes no responsibility for any damage to your radio, amplifier, or other equipment, unintended transmissions, or any other consequences of using this app. Always verify your radio's behaviour (frequency, mode, power) before and during remote operation.
 
 Open source — use, modify, and share freely.
 
