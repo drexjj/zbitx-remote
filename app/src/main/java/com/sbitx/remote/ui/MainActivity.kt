@@ -89,10 +89,15 @@ fun AppRoot(service: RadioService?) {
 
 @Composable
 fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: SbitxClient?) {
-    var host by remember { mutableStateOf("sbitx.local") }
-    var port by remember { mutableStateOf("8443") }
-    var pin by remember { mutableStateOf("") }
-    var useTls by remember { mutableStateOf(true) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val prefs = remember { ctx.getSharedPreferences("sbitx", Context.MODE_PRIVATE) }
+
+    var viaTailscale by remember { mutableStateOf(prefs.getBoolean("viaTailscale", false)) }
+    var localHost by remember { mutableStateOf(prefs.getString("localHost", "192.168.1.11")!!) }
+    var tsHost by remember { mutableStateOf(prefs.getString("tsHost", "")!!) }
+    var port by remember { mutableStateOf(prefs.getString("port", "8443")!!) }
+    var pin by remember { mutableStateOf(prefs.getString("pin", "")!!) }
+    var useTls by remember { mutableStateOf(prefs.getBoolean("useTls", true)) }
     val lastError = client?.lastError?.collectAsState()?.value
 
     Column(
@@ -101,11 +106,41 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text("sBitx Remote", style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(24.dp))
-        OutlinedTextField(host, { host = it }, label = { Text("Radio host / Tailscale IP") },
-            singleLine = true, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(20.dp))
+
+        // --- Connection method selector ---
+        Text("Connect via", style = MaterialTheme.typography.labelLarge)
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = !viaTailscale, onClick = { viaTailscale = false },
+                label = { Text("Local network") }, modifier = Modifier.weight(1f)
+            )
+            FilterChip(
+                selected = viaTailscale, onClick = { viaTailscale = true },
+                label = { Text("Tailscale (internet)") }, modifier = Modifier.weight(1f)
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+
+        if (viaTailscale) {
+            OutlinedTextField(tsHost, { tsHost = it },
+                label = { Text("Tailscale IP / MagicDNS name") },
+                placeholder = { Text("100.x.y.z or sbitx.tailxxxx.ts.net") },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            Text(
+                "Make sure the Tailscale app is connected on this phone",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        } else {
+            OutlinedTextField(localHost, { localHost = it },
+                label = { Text("Radio local IP") },
+                placeholder = { Text("192.168.1.11") },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+        }
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(port, { port = it }, label = { Text("Port (8080 / 8443)") },
+        OutlinedTextField(port, { port = it }, label = { Text("Port (8443)") },
             singleLine = true, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(pin, { pin = it }, label = { Text("PIN") },
@@ -113,14 +148,24 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(useTls, { useTls = it })
-            Text("Use TLS (port 8443)")
+            Text("Use TLS (required by drexjj firmware, port 8443)")
         }
         Spacer(Modifier.height(16.dp))
         Button(
             onClick = {
-                service?.connect(host.trim(), port.trim().toIntOrNull() ?: 8080, useTls, pin.trim())
+                val host = (if (viaTailscale) tsHost else localHost).trim()
+                prefs.edit()
+                    .putBoolean("viaTailscale", viaTailscale)
+                    .putString("localHost", localHost.trim())
+                    .putString("tsHost", tsHost.trim())
+                    .putString("port", port.trim())
+                    .putString("pin", pin.trim())
+                    .putBoolean("useTls", useTls)
+                    .apply()
+                service?.connect(host, port.trim().toIntOrNull() ?: 8443, useTls, pin.trim())
             },
-            enabled = service != null && state != SbitxClient.ConnState.CONNECTING,
+            enabled = service != null && state != SbitxClient.ConnState.CONNECTING &&
+                (if (viaTailscale) tsHost.isNotBlank() else localHost.isNotBlank()),
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) { Text(if (state == SbitxClient.ConnState.CONNECTING || state == SbitxClient.ConnState.LOGIN_SENT) "Connecting…" else "Connect") }
 
@@ -137,7 +182,7 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
             )
         }
         Spacer(Modifier.height(8.dp))
-        Text("Status: $state", style = MaterialTheme.typography.bodySmall)
+        Text("Status: $state   •   v0.2", style = MaterialTheme.typography.bodySmall)
     }
 }
 
