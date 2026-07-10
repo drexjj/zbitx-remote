@@ -89,9 +89,17 @@ class SbitxClient(
     private val _rxAudio = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
     val rxAudio: SharedFlow<ByteArray> = _rxAudio
 
-    /** Console/decode text lines (CW/FT8 decodes etc.). */
-    private val _console = MutableSharedFlow<String>(extraBufferCapacity = 64)
-    val console: SharedFlow<String> = _console
+    /** Parsed console lines: FT8/CW decodes, TX confirmations, logs. */
+    data class ConsoleLine(val kind: String, val line: Int, val text: String)
+
+    private val _console = MutableSharedFlow<ConsoleLine>(extraBufferCapacity = 256)
+    val console: SharedFlow<ConsoleLine> = _console
+
+    // e.g. <WSJTX-RX l="42">102400 -15 0.2 1440 ~ CQ YH1AB OI33</WSJTX-RX>
+    private val consoleTag = Regex(
+        """<([A-Z0-9\-]+)(?:\s+l="(\d+)")?>(.*?)</\1>""",
+        RegexOption.DOT_MATCHES_ALL
+    )
 
     /** Spectrum frames ("RX ..." / "TX ..." ASCII-encoded bins). */
     private val _spectrum = MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -169,6 +177,19 @@ class SbitxClient(
 
     fun refresh() = sendCommand("refresh")
 
+    /** Send a raw console line (no field=value), e.g. "key CQ VU3UBP MK68". */
+    fun sendRaw(line: String) {
+        val w = ws ?: return
+        val msg = "$cookie\n$line"
+        if (msg.length <= 99) w.send(msg)
+    }
+
+    /** Queue an FT8 message for transmission in the next time slot. */
+    fun ft8Transmit(message: String) = sendRaw("key " + message.trim() + "\n")
+
+    /** FT8 auto-operate mode: OFF, CQRESP (answer CQs), ANS (answer replies). */
+    fun setFt8Auto(modeStr: String) = sendCommand("FTX_AUTO", modeStr)
+
     /** Stream one chunk of mic PCM (int16 LE @ 8 kHz mono) while transmitting. */
     fun sendMicAudio(pcm: ByteArray) {
         ws?.send(pcm.toByteString())
@@ -194,7 +215,17 @@ class SbitxClient(
                 ws?.close(1000, "server quit")
             }
             text.startsWith("RX ") || text.startsWith("TX ") -> _spectrum.tryEmit(text)
-            text.startsWith("console ") -> _console.tryEmit(text.removePrefix("console "))
+            text.startsWith("CONSOLE ") -> {
+                val payload = text.removePrefix("CONSOLE ")
+                for (m in consoleTag.findAll(payload)) {
+                    val kind = m.groupValues[1]
+                    val line = m.groupValues[2].toIntOrNull() ?: -1
+                    val body = m.groupValues[3]
+                        .replace("&lt;", "<").replace("&gt;", ">")
+                        .replace("&amp;", "&").trim()
+                    if (body.isNotEmpty()) _console.tryEmit(ConsoleLine(kind, line, body))
+                }
+            }
             else -> {
                 // Generic "LABEL value" field update
                 val sp = text.indexOf(' ')

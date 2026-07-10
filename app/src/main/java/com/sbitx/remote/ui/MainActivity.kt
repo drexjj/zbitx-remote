@@ -23,6 +23,8 @@ import kotlin.math.cos
 import kotlin.math.sin
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
@@ -190,7 +192,7 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
             )
         }
         Spacer(Modifier.height(8.dp))
-        Text("Status: $state   •   v0.4", style = MaterialTheme.typography.bodySmall)
+        Text("Status: $state   •   v0.5", style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -257,7 +259,13 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
                         label = { Text(m) })
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
+
+            // ---- FT8 console (visible in FT8 mode) ----
+            if (mode == "FT8" || mode == "FT4") {
+                Ft8Console(client)
+                Spacer(Modifier.height(6.dp))
+            }
 
             // ---- Sliders ----
             Spacer(Modifier.height(0.dp))
@@ -420,6 +428,81 @@ fun stepName(mult: Long): String = when (mult) {
     10_000_000L -> "10 MHz"; 1_000_000L -> "1 MHz"
     100_000L -> "100 kHz"; 10_000L -> "10 kHz"; 1_000L -> "1 kHz"
     100L -> "100 Hz"; 10L -> "10 Hz"; else -> "1 Hz"
+}
+
+/**
+ * Live FT8 activity streamed from the radio (decoding happens on the sBitx).
+ * Tap a decode to copy its callsign into the message box; Send queues the
+ * message for the next FT8 time slot via the firmware's "key" command.
+ */
+@Composable
+fun Ft8Console(client: SbitxClient) {
+    val lines = remember { mutableStateListOf<SbitxClient.ConsoleLine>() }
+    val listState = rememberLazyListState()
+    var msg by remember { mutableStateOf("") }
+
+    LaunchedEffect(client) {
+        client.console.collect { cl ->
+            if (cl.kind.startsWith("WSJTX")) {
+                lines.add(cl)
+                if (lines.size > 200) lines.removeAt(0)
+                listState.animateScrollToItem(lines.size - 1)
+            }
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF10141A), RoundedCornerShape(8.dp))
+            .padding(6.dp)
+    ) {
+        Text("FT8 activity", fontSize = 12.sp, color = Color(0xFF81C784))
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxWidth().height(180.dp)
+        ) {
+            items(lines.size) { i ->
+                val l = lines[i]
+                val color = when (l.kind) {
+                    "WSJTX-TX" -> Color(0xFFEF5350)   // our transmissions
+                    "WSJTX-Q" -> Color(0xFFFFB74D)    // queued for TX
+                    else -> Color(0xFFE0E0E0)          // received decodes
+                }
+                Text(
+                    l.text,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    color = color,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            // pull the most likely callsign into the message box
+                            val call = l.text.split(" ")
+                                .lastOrNull { it.any(Char::isDigit) && it.any(Char::isLetter) && it.length in 3..10 }
+                            if (call != null) msg = call
+                        }
+                        .padding(vertical = 1.dp)
+                )
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                msg, { msg = it.uppercase() },
+                label = { Text("FT8 message (e.g. CQ VU3UBP MK68)", fontSize = 11.sp) },
+                singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    fontFamily = FontFamily.Monospace, fontSize = 13.sp
+                ),
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(6.dp))
+            Button(
+                onClick = { if (msg.isNotBlank()) { client.ft8Transmit(msg) } },
+                enabled = msg.isNotBlank()
+            ) { Text("Send") }
+        }
+    }
 }
 
 @Composable
