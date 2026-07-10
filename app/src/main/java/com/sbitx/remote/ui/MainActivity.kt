@@ -192,7 +192,7 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
             )
         }
         Spacer(Modifier.height(8.dp))
-        Text("Status: $state   •   v0.7", style = MaterialTheme.typography.bodySmall)
+        Text("Status: $state   •   v0.8", style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -598,17 +598,18 @@ fun decoSpans(text: String): List<Pair<Char, String>> {
  */
 fun renderDecorated(text: String, kind: String):
         androidx.compose.ui.text.AnnotatedString {
+    // Exact colors from the firmware's font_table (sbitx_gtk.c)
     fun colorOf(s: Char): Color = when (s) {
-        'G' -> Color(0xFFFFD54F)          // time / freq
-        'H' -> Color(0xFF64B5F6)          // SNR
-        'Q' -> Color(0xFFFFEB3B)          // my callsign
-        'R' -> Color(0xFF4DD0E1)          // caller
-        'S' -> Color(0xFF81C784)          // grid (new)
-        'W' -> Color(0xFF558B2F)          // grid (already worked)
-        'P' -> Color(0xFFFFB74D)          // country / FT8 reply
+        'G' -> Color(0xFF00CCCC)          // time / freq / FT8 RX (0,0.8,0.8)
+        'H' -> Color(0xFFFFFFFF)          // SNR (1,1,1)
+        'Q' -> Color(0xFFFF3333)          // my callsign (1,0,0)
+        'R' -> Color(0xFFE07818)          // caller (0.8,0.4,0)
+        'S' -> Color(0xFFFFCC00)          // grid, new (1,0.8,0)
+        'W' -> Color(0xFF00B300)          // grid, already worked (0,0.6,0)
+        'P' -> Color(0xFF00E000)          // country / FT8 reply (0,1,0)
         'O' -> Color(0xFFFFB74D)          // queued
-        'U', 'V' -> Color(0xFF9E9E9E)     // distance / azimuth
-        else -> Color(0xFFE0E0E0)
+        'U', 'V' -> Color(0xFFFFCC00)     // distance / azimuth (1,0.8,0)
+        else -> Color(0xFFB3B3B3)         // log/default (0.7,0.7,0.7)
     }
     return androidx.compose.ui.text.buildAnnotatedString {
         val kindTint = when (kind) {
