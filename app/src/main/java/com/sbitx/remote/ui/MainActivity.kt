@@ -13,6 +13,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.ui.geometry.Offset
@@ -188,7 +190,7 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
             )
         }
         Spacer(Modifier.height(8.dp))
-        Text("Status: $state   •   v0.3", style = MaterialTheme.typography.bodySmall)
+        Text("Status: $state   •   v0.4", style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -209,19 +211,19 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
 
         // ================= FIXED HEADER: freq readout + tuning knob =================
+        var selectedMult by remember { mutableStateOf(100L) }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(
-                    formatFreq(freq),
-                    fontSize = 32.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold
-                )
-                Text("$mode   S: $smeter", style = MaterialTheme.typography.bodySmall)
+                FreqDigits(freq, selectedMult) { selectedMult = it }
+                Text("$mode   S: $smeter   step: ${stepName(selectedMult)}",
+                    style = MaterialTheme.typography.bodySmall)
             }
             TuningKnob(
-                modifier = Modifier.size(96.dp),
-                onDelta = { steps -> client.setFrequency(freqNow.value + steps * 100L) }
+                modifier = Modifier.size(92.dp),
+                onDelta = { steps ->
+                    val f = (freqNow.value + steps * selectedMult).coerceIn(500_000L, 30_000_000L)
+                    client.setFrequency(f)
+                }
             )
         }
         Spacer(Modifier.height(4.dp))
@@ -239,13 +241,13 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
                 }
             }
             FreqEntryRow { client.setFrequency(it) }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
 
             // ---- Band (dropdown) + Mode ----
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 BandDropdown(Modifier.weight(1f)) { client.setBand(it) }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -258,6 +260,7 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
             Spacer(Modifier.height(8.dp))
 
             // ---- Sliders ----
+            Spacer(Modifier.height(0.dp))
             LabeledSlider("Mic gain", mic, 0..100) { client.setMicGain(it) }
             LabeledSlider("Volume", vol, 0..100) { client.setVolume(it) }
             LabeledSlider("Drive (power)", drive, 1..100) { client.setDrive(it) }
@@ -273,8 +276,8 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(96.dp)
-                .padding(top = 6.dp)
+                .height(84.dp)
+                .padding(top = 4.dp)
                 .background(
                     if (txActive) Color(0xFFB71C1C) else Color(0xFF1B5E20),
                     RoundedCornerShape(16.dp)
@@ -371,14 +374,52 @@ fun BandDropdown(modifier: Modifier = Modifier, onSelect: (String) -> Unit) {
 fun LabeledSlider(label: String, value: Int, range: IntRange, step: Int = 1, onSet: (Int) -> Unit) {
     var local by remember(value) { mutableFloatStateOf(value.toFloat()) }
     Column {
-        Text("$label: ${local.toInt()}")
+        Text("$label: ${local.toInt()}", fontSize = 13.sp)
         Slider(
             value = local,
             onValueChange = { local = it },
             onValueChangeFinished = { onSet((local.toInt() / step) * step) },
-            valueRange = range.first.toFloat()..range.last.toFloat()
+            valueRange = range.first.toFloat()..range.last.toFloat(),
+            modifier = Modifier.height(30.dp)
         )
     }
+}
+
+/** Tap-to-select frequency digits; the knob then tunes the selected digit's place. */
+@Composable
+fun FreqDigits(freq: Long, selectedMult: Long, onSelect: (Long) -> Unit) {
+    val f = freq.coerceIn(0L, 99_999_999L)
+    val digits = "%08d".format(f)
+    val mults = listOf(
+        10_000_000L, 1_000_000L, 100_000L, 10_000L, 1_000L, 100L, 10L, 1L
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        digits.forEachIndexed { i, ch ->
+            if (i == 2 || i == 5) {
+                Text(".", fontSize = 30.sp, fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold)
+            }
+            val sel = mults[i] == selectedMult
+            Text(
+                ch.toString(),
+                fontSize = 30.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = if (sel) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface,
+                textDecoration = if (sel) TextDecoration.Underline else null,
+                modifier = Modifier
+                    .clickable { onSelect(mults[i]) }
+                    .padding(horizontal = 1.dp)
+            )
+        }
+    }
+}
+
+fun stepName(mult: Long): String = when (mult) {
+    10_000_000L -> "10 MHz"; 1_000_000L -> "1 MHz"
+    100_000L -> "100 kHz"; 10_000L -> "10 kHz"; 1_000L -> "1 kHz"
+    100L -> "100 Hz"; 10L -> "10 Hz"; else -> "1 Hz"
 }
 
 @Composable
