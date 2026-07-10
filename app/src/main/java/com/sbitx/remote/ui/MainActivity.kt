@@ -192,7 +192,7 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
             )
         }
         Spacer(Modifier.height(8.dp))
-        Text("Status: $state   •   v0.6", style = MaterialTheme.typography.bodySmall)
+        Text("Status: $state   •   v0.7", style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -431,9 +431,10 @@ fun stepName(mult: Long): String = when (mult) {
 }
 
 /**
- * FT8 operating panel. Decoding happens on the sBitx; the app streams the
- * decodes, colorizes them, and sends standard FT8 messages via "key".
- * No PTT needed - the radio transmits in the next 15 s time slot.
+ * FT8 operating panel. Decodes stream from the radio as styled fragments
+ * sharing a row id; we stitch fragments into single lines and render the
+ * firmware's #X span styles with the same meaning as the sBitx screen:
+ * time/freq, SNR, caller, grid, country, my-call highlight.
  */
 @Composable
 fun Ft8Console(client: SbitxClient) {
@@ -441,20 +442,33 @@ fun Ft8Console(client: SbitxClient) {
     val myCall = (fields["MYCALLSIGN"] ?: "").uppercase()
     val myGrid = (fields["MYGRID"] ?: "").uppercase().take(4)
 
-    val lines = remember { mutableStateListOf<SbitxClient.ConsoleLine>() }
+    // ordered rows: rowId -> accumulated decorated text
+    val rowOrder = remember { mutableStateListOf<Int>() }
+    val rowText = remember { mutableStateMapOf<Int, String>() }
+    val rowKind = remember { mutableStateMapOf<Int, String>() }
+    var synth = remember { -1 }
     val listState = rememberLazyListState()
     var msg by remember { mutableStateOf("") }
     var dxCall by remember { mutableStateOf("") }
     var dxSnr by remember { mutableStateOf("") }
-    var cqMod by remember { mutableStateOf("") }   // "", DX, POTA, ...
+    var cqMod by remember { mutableStateOf("") }
 
     LaunchedEffect(client) {
         client.console.collect { cl ->
-            if (cl.kind.startsWith("WSJTX")) {
-                lines.add(cl)
-                if (lines.size > 200) lines.removeAt(0)
-                listState.animateScrollToItem(lines.size - 1)
+            if (!cl.kind.startsWith("WSJTX")) return@collect
+            val id = if (cl.line >= 0) cl.line else synth--
+            if (rowText.containsKey(id)) {
+                rowText[id] = rowText[id] + cl.text
+            } else {
+                rowText[id] = cl.text
+                rowKind[id] = cl.kind
+                rowOrder.add(id)
+                if (rowOrder.size > 200) {
+                    val old = rowOrder.removeAt(0)
+                    rowText.remove(old); rowKind.remove(old)
+                }
             }
+            if (rowOrder.isNotEmpty()) listState.animateScrollToItem(rowOrder.size - 1)
         }
     }
 
@@ -473,10 +487,12 @@ fun Ft8Console(client: SbitxClient) {
             state = listState,
             modifier = Modifier.fillMaxWidth().height(170.dp)
         ) {
-            items(lines.size) { i ->
-                val l = lines[i]
+            items(rowOrder.size) { i ->
+                val id = rowOrder[i]
+                val text = rowText[id] ?: return@items
+                val kind = rowKind[id] ?: "WSJTX-RX"
                 Text(
-                    colorizeDecode(l, myCall),
+                    renderDecorated(text, kind),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
                     maxLines = 1,
@@ -484,10 +500,15 @@ fun Ft8Console(client: SbitxClient) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
-                            parseDecode(l.text)?.let { d ->
-                                if (d.from.isNotBlank()) dxCall = d.from
-                                dxSnr = d.snr
-                            }
+                            val sp = decoSpans(text)
+                            sp.firstOrNull { it.first == 'R' }?.let { dxCall = it.second.trim() }
+                                ?: run {
+                                    val plain = sp.joinToString("") { it.second }
+                                    plain.split(" ").lastOrNull {
+                                        it.any(Char::isDigit) && it.any(Char::isLetter) && it.length in 3..10
+                                    }?.let { dxCall = it }
+                                }
+                            sp.firstOrNull { it.first == 'H' }?.let { dxSnr = it.second.trim() }
                         }
                         .padding(vertical = 1.dp)
                 )
@@ -497,7 +518,8 @@ fun Ft8Console(client: SbitxClient) {
         // ---- Standard message templates ----
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             OutlinedTextField(
                 cqMod, { cqMod = it.uppercase().trim() },
@@ -506,14 +528,15 @@ fun Ft8Console(client: SbitxClient) {
                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp),
                 modifier = Modifier.width(86.dp)
             )
-            val cq = listOf("CQ", cqMod, myCall, myGrid).filter { it.isNotBlank() }
-                .joinToString(" ")
-            Ft8Btn("CQ", myCall.isNotBlank()) { msg = cq }
+            Ft8Btn("CQ", myCall.isNotBlank()) {
+                msg = listOf("CQ", cqMod, myCall, myGrid)
+                    .filter { it.isNotBlank() }.joinToString(" ")
+            }
             Ft8Btn("Call", dxCall.isNotBlank() && myCall.isNotBlank()) {
                 msg = "$dxCall $myCall $myGrid".trim()
             }
             Ft8Btn("Rprt", dxCall.isNotBlank() && myCall.isNotBlank()) {
-                msg = "$dxCall $myCall ${if (dxSnr.isNotBlank()) dxSnr else "-10"}"
+                msg = "$dxCall $myCall ${dxSnr.ifBlank { "-10" }}"
             }
             Ft8Btn("RR73", dxCall.isNotBlank() && myCall.isNotBlank()) {
                 msg = "$dxCall $myCall RR73"
@@ -551,64 +574,56 @@ fun Ft8Btn(label: String, enabled: Boolean, onClick: () -> Unit) {
     ) { Text(label, fontSize = 12.sp) }
 }
 
-data class Ft8Decode(
-    val meta: String, val snr: String,
-    val to: String, val from: String, val extra: String, val isCq: Boolean
-)
-
-/** Parse "102400 -18 0.2 1441 ~ CQ YH1AB OI33" or "... ~ VU3UBP YH1AB -10". */
-fun parseDecode(text: String): Ft8Decode? {
-    val t = text.trim().split(Regex("\\s+"))
-    if (t.size < 2) return null
-    val sep = t.indexOfFirst { it == "~" || it == "+" }
-    val meta = if (sep > 0) t.subList(0, sep) else emptyList()
-    val m = if (sep >= 0 && sep + 1 < t.size) t.subList(sep + 1, t.size) else t
-    val snr = meta.getOrNull(1) ?: ""
-    return if (m.isNotEmpty() && m[0] == "CQ") {
-        when (m.size) {
-            2 -> Ft8Decode(meta.joinToString(" "), snr, "CQ", m[1], "", true)
-            3 -> Ft8Decode(meta.joinToString(" "), snr, "CQ", m[1], m[2], true)
-            else -> Ft8Decode(meta.joinToString(" "), snr, "CQ " + m[1], m.getOrElse(2){""}, m.getOrElse(3){""}, true)
-        }
-    } else {
-        Ft8Decode(meta.joinToString(" "), snr,
-            m.getOrElse(0){""}, m.getOrElse(1){""}, m.getOrElse(2){""}, false)
+/** Split "#G142645 16 #H-15 ..." into (styleChar, text) spans. Default style 'F'. */
+fun decoSpans(text: String): List<Pair<Char, String>> {
+    val out = mutableListOf<Pair<Char, String>>()
+    var style = 'F'
+    val sb = StringBuilder()
+    var i = 0
+    while (i < text.length) {
+        val c = text[i]
+        if (c == '#' && i + 1 < text.length && text[i + 1] in 'A'..'Z') {
+            if (sb.isNotEmpty()) { out.add(style to sb.toString()); sb.clear() }
+            style = text[i + 1]; i += 2
+        } else { sb.append(c); i++ }
     }
+    if (sb.isNotEmpty()) out.add(style to sb.toString())
+    return out
 }
 
-/** Single-line colorized decode: meta dim, receiver yellow, caller cyan, grid/report green. */
-fun colorizeDecode(l: SbitxClient.ConsoleLine, myCall: String):
+/**
+ * Render firmware span styles (see hist_disp.c ff_char):
+ * G=time/freq/FT8-RX, H=SNR/FT8-TX, Q=my call, R=caller, S=grid,
+ * W=already-worked grid, P=country/reply, O=queued, U/V=distance/azimuth.
+ */
+fun renderDecorated(text: String, kind: String):
         androidx.compose.ui.text.AnnotatedString {
-    val dim = Color(0xFF757575)
-    val toC = Color(0xFFFFD54F)      // receiver / CQ
-    val fromC = Color(0xFF4FC3F7)    // caller
-    val gridC = Color(0xFF81C784)    // grid / report
-    val txC = Color(0xFFEF5350)
+    fun colorOf(s: Char): Color = when (s) {
+        'G' -> Color(0xFFFFD54F)          // time / freq
+        'H' -> Color(0xFF64B5F6)          // SNR
+        'Q' -> Color(0xFFFFEB3B)          // my callsign
+        'R' -> Color(0xFF4DD0E1)          // caller
+        'S' -> Color(0xFF81C784)          // grid (new)
+        'W' -> Color(0xFF558B2F)          // grid (already worked)
+        'P' -> Color(0xFFFFB74D)          // country / FT8 reply
+        'O' -> Color(0xFFFFB74D)          // queued
+        'U', 'V' -> Color(0xFF9E9E9E)     // distance / azimuth
+        else -> Color(0xFFE0E0E0)
+    }
     return androidx.compose.ui.text.buildAnnotatedString {
-        val d = parseDecode(l.text)
-        if (d == null) { append(l.text); return@buildAnnotatedString }
-        val base = when (l.kind) {
-            "WSJTX-TX" -> txC
+        val kindTint = when (kind) {
+            "WSJTX-TX" -> Color(0xFFEF5350)
             "WSJTX-Q" -> Color(0xFFFFB74D)
-            else -> Color(0xFFE0E0E0)
+            else -> null
         }
-        pushStyle(androidx.compose.ui.text.SpanStyle(color = dim))
-        append(d.meta + " ")
-        pop()
-        val hl = myCall.isNotBlank() && l.text.contains(myCall)
-        pushStyle(androidx.compose.ui.text.SpanStyle(
-            color = toC, fontWeight = if (hl) FontWeight.Bold else null))
-        append(d.to + " ")
-        pop()
-        pushStyle(androidx.compose.ui.text.SpanStyle(
-            color = fromC, fontWeight = if (hl) FontWeight.Bold else null))
-        append(d.from + " ")
-        pop()
-        pushStyle(androidx.compose.ui.text.SpanStyle(color = gridC))
-        append(d.extra)
-        pop()
-        if (base == txC || base == Color(0xFFFFB74D)) {
-            // prefix marker for our own TX / queued lines
+        for ((s, t) in decoSpans(text)) {
+            val bold = s == 'Q'
+            pushStyle(androidx.compose.ui.text.SpanStyle(
+                color = kindTint ?: colorOf(s),
+                fontWeight = if (bold) FontWeight.Bold else null
+            ))
+            append(t)
+            pop()
         }
     }
 }
