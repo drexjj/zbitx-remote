@@ -13,6 +13,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.ui.geometry.Offset
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -182,7 +188,7 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
             )
         }
         Spacer(Modifier.height(8.dp))
-        Text("Status: $state   •   v0.2", style = MaterialTheme.typography.bodySmall)
+        Text("Status: $state   •   v0.3", style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -198,70 +204,77 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
     val bw = fields["BW"]?.toIntOrNull() ?: 2400
     val smeter = fields["SMETER"] ?: "0 0"
     var txActive by remember { mutableStateOf(false) }
+    val freqNow = rememberUpdatedState(freq)
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
-    ) {
-        // ---- Frequency readout + tuning ----
-        Text(
-            formatFreq(freq),
-            fontSize = 40.sp,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Text("Mode: $mode    S: $smeter", textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth())
-        Spacer(Modifier.height(8.dp))
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
 
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            listOf(-1000L, -100L, +100L, +1000L).forEach { d ->
-                OutlinedButton(onClick = { client.setFrequency(freq + d) }) {
-                    Text(if (d > 0) "+${d / 100}" else "${d / 100}")
-                }
+        // ================= FIXED HEADER: freq readout + tuning knob =================
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    formatFreq(freq),
+                    fontSize = 32.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
+                Text("$mode   S: $smeter", style = MaterialTheme.typography.bodySmall)
             }
+            TuningKnob(
+                modifier = Modifier.size(96.dp),
+                onDelta = { steps -> client.setFrequency(freqNow.value + steps * 100L) }
+            )
         }
-        FreqEntryRow { client.setFrequency(it) }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
 
-        // ---- Bands ----
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(4),
-            modifier = Modifier.height(96.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+        // ================= SCROLLABLE CONTROLS =================
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState())
         ) {
-            items(listOf("80M", "40M", "30M", "20M", "17M", "15M", "12M", "10M")) { b ->
-                OutlinedButton(onClick = { client.setBand(b) }, contentPadding = PaddingValues(4.dp)) {
-                    Text(b, fontSize = 12.sp)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                listOf(-1000L, -100L, +100L, +1000L).forEach { d ->
+                    OutlinedButton(
+                        onClick = { client.setFrequency(freq + d) },
+                        contentPadding = PaddingValues(horizontal = 10.dp)
+                    ) { Text(if (d > 0) "+${d / 100}" else "${d / 100}") }
                 }
             }
-        }
-        Spacer(Modifier.height(8.dp))
+            FreqEntryRow { client.setFrequency(it) }
+            Spacer(Modifier.height(8.dp))
 
-        // ---- Mode ----
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("LSB", "USB", "CW", "AM").forEach { m ->
-                FilterChip(selected = mode == m, onClick = { client.setMode(m) },
-                    label = { Text(m) })
+            // ---- Band (dropdown) + Mode ----
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BandDropdown(Modifier.weight(1f)) { client.setBand(it) }
             }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf("LSB", "USB", "CW", "AM", "FT8").forEach { m ->
+                    FilterChip(selected = mode == m, onClick = { client.setMode(m) },
+                        label = { Text(m) })
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // ---- Sliders ----
+            LabeledSlider("Mic gain", mic, 0..100) { client.setMicGain(it) }
+            LabeledSlider("Volume", vol, 0..100) { client.setVolume(it) }
+            LabeledSlider("Drive (power)", drive, 1..100) { client.setDrive(it) }
+            LabeledSlider("Bandwidth", bw, 300..5000, step = 100) { client.setBandwidth(it) }
+
+            OutlinedButton(onClick = { service.disconnect() }, modifier = Modifier.fillMaxWidth()) {
+                Text("Disconnect")
+            }
+            Spacer(Modifier.height(8.dp))
         }
-        Spacer(Modifier.height(12.dp))
 
-        // ---- Sliders ----
-        LabeledSlider("Mic gain", mic, 0..100) { client.setMicGain(it) }
-        LabeledSlider("Volume", vol, 0..100) { client.setVolume(it) }
-        LabeledSlider("Drive (power)", drive, 1..100) { client.setDrive(it) }
-        LabeledSlider("Bandwidth", bw, 300..5000, step = 100) { client.setBandwidth(it) }
-
-        Spacer(Modifier.height(16.dp))
-
-        // ---- PTT (press & hold) ----
+        // ================= FIXED PTT (always visible) =================
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(110.dp)
+                .height(96.dp)
+                .padding(top = 6.dp)
                 .background(
                     if (txActive) Color(0xFFB71C1C) else Color(0xFF1B5E20),
                     RoundedCornerShape(16.dp)
@@ -284,10 +297,72 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
                 color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold
             )
         }
+    }
+}
 
-        Spacer(Modifier.height(12.dp))
-        OutlinedButton(onClick = { service.disconnect() }, modifier = Modifier.fillMaxWidth()) {
-            Text("Disconnect")
+/** Rotary tuning knob: drag around the center; each 12 degrees = one 100 Hz step. */
+@Composable
+fun TuningKnob(modifier: Modifier = Modifier, onDelta: (Int) -> Unit) {
+    var angle by remember { mutableFloatStateOf(0f) }
+    var accum by remember { mutableFloatStateOf(0f) }
+    val knobColor = MaterialTheme.colorScheme.surfaceVariant
+    val rimColor = MaterialTheme.colorScheme.primary
+    val dotColor = MaterialTheme.colorScheme.onSurface
+
+    androidx.compose.foundation.Canvas(
+        modifier = modifier.pointerInput(Unit) {
+            detectDragGestures { change, _ ->
+                val c = Offset(size.width / 2f, size.height / 2f)
+                val p0 = change.previousPosition - c
+                val p1 = change.position - c
+                var d = Math.toDegrees(
+                    (atan2(p1.y, p1.x) - atan2(p0.y, p0.x)).toDouble()
+                ).toFloat()
+                if (d > 180f) d -= 360f
+                if (d < -180f) d += 360f
+                angle += d
+                accum += d
+                val stepDeg = 12f
+                while (accum >= stepDeg) { onDelta(+1); accum -= stepDeg }
+                while (accum <= -stepDeg) { onDelta(-1); accum += stepDeg }
+                change.consume()
+            }
+        }
+    ) {
+        val r = size.minDimension / 2f
+        val c = Offset(size.width / 2f, size.height / 2f)
+        drawCircle(color = knobColor, radius = r, center = c)
+        drawCircle(color = rimColor, radius = r, center = c,
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = r * 0.08f))
+        // knurl ticks
+        for (i in 0 until 12) {
+            val a = Math.toRadians((angle + i * 30f).toDouble())
+            val inner = c + Offset(cos(a).toFloat(), sin(a).toFloat()) * (r * 0.72f)
+            val outer = c + Offset(cos(a).toFloat(), sin(a).toFloat()) * (r * 0.88f)
+            drawLine(rimColor.copy(alpha = 0.5f), inner, outer, strokeWidth = r * 0.04f)
+        }
+        // position dot
+        val a = Math.toRadians(angle.toDouble() - 90.0)
+        val dot = c + Offset(cos(a).toFloat(), sin(a).toFloat()) * (r * 0.55f)
+        drawCircle(color = dotColor, radius = r * 0.10f, center = dot)
+    }
+}
+
+/** Band selector as a dropdown menu. */
+@Composable
+fun BandDropdown(modifier: Modifier = Modifier, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf("Band") }
+    Box(modifier) {
+        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text("Band: $selected  ▾")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            listOf("80M", "40M", "30M", "20M", "17M", "15M", "12M", "10M").forEach { b ->
+                DropdownMenuItem(text = { Text(b) }, onClick = {
+                    selected = b; expanded = false; onSelect(b)
+                })
+            }
         }
     }
 }
