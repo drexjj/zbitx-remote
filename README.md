@@ -6,6 +6,10 @@ Full remote control over the internet — tune the bands, work SSB with your pho
 
 Created by **VU3UBP** 🇮🇳
 
+[![Download APK](https://img.shields.io/github/v/release/vis4573/sbitx-remote?label=%F0%9F%93%A5%20Download%20APK&style=for-the-badge&color=2ea44f)](https://github.com/vis4573/sbitx-remote/releases/latest/download/sbitx-remote.apk)
+
+**[⬇️ Download the latest APK](https://github.com/vis4573/sbitx-remote/releases/latest/download/sbitx-remote.apk)** — or browse all versions on the [Releases page](https://github.com/vis4573/sbitx-remote/releases).
+
 ---
 
 ## ✨ Features
@@ -95,7 +99,7 @@ sudo systemctl enable --now tailscaled
 Install the **Tailscale** app from the Play Store, sign in with the **same account**, and flip the VPN toggle on. You should see your sBitx listed as a device.
 
 ### 5. Install sBitx Remote
-Download the latest `sbitx-remote.apk` from the [Releases](../../releases) page directly in your phone's browser and install it (allow "install unknown apps" if prompted).
+Download the latest APK directly on your phone: **[sbitx-remote.apk](https://github.com/vis4573/sbitx-remote/releases/latest/download/sbitx-remote.apk)** (or via the [Releases](../../releases) page) and install it (allow "install unknown apps" if prompted).
 
 ### 6. Connect and operate
 - **At home:** choose **Local network**, enter the radio's LAN IP, port `8443`, TLS on, your PIN → Connect

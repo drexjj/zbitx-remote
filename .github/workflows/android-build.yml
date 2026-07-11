@@ -27,16 +27,24 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      # Version numbers: main releases are v1, v2, ... ;
-      # feature/beta builds are v<last>.<run#>, e.g. Beta v1.5
+      # Versioning: first main release is v1, then v1.1, v1.2, ...
+      # (if a v2 tag is ever created manually, automation continues v2.1, v2.2)
+      # Beta builds: v<latest>.<run#>, e.g. Beta v1.1.57
       - name: Compute versions
         id: relver
         run: |
           git fetch --tags --quiet
-          last=$(git tag -l 'v[0-9]*' | sed 's/^v//' | sort -n | tail -1)
-          last=${last:-0}
-          echo "next=v$(( last + 1 ))" >> "$GITHUB_OUTPUT"
-          echo "beta=v${last}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          last=$(git tag -l 'v[0-9]*' | sed 's/^v//' | sort -V | tail -1)
+          if [ -z "$last" ]; then
+            next=v1
+          elif [[ "$last" != *.* ]]; then
+            next=v${last}.1
+          else
+            major=${last%.*}; minor=${last##*.}
+            next=v${major}.$(( minor + 1 ))
+          fi
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+          echo "beta=v${last:-0}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
       - name: Build debug APK
         run: |
