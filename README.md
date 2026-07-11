@@ -4,11 +4,7 @@
 
 Full remote control over the internet — tune the bands, work SSB with your phone's microphone, and listen to live receiver audio, whether you're in the next room or another country.
 
-Created by **VU3UBP** 🇮🇳
-
-[![Download APK](https://img.shields.io/github/v/release/vis4573/sbitx-remote?label=%F0%9F%93%A5%20Download%20APK&style=for-the-badge&color=2ea44f)](https://github.com/vis4573/sbitx-remote/releases/latest/download/sbitx-remote.apk)
-
-**[⬇️ Download the latest APK](https://github.com/vis4573/sbitx-remote/releases/latest/download/sbitx-remote.apk)** — or browse all versions on the [Releases page](https://github.com/vis4573/sbitx-remote/releases).
+Created by **VU3UBP**
 
 ---
 
@@ -161,6 +157,14 @@ This app stands on the shoulders of some remarkable open-source work:
 - **[Ashhar Farhan, VU2ESE](https://github.com/afarhan/sbitx)** — creator of the sBitx and the original open-source radio software that started it all. The sBitx's "hackable HF SDR" philosophy is what makes projects like this possible.
 - **[W9JES and the drexjj/sbitx team](https://github.com/drexjj/sbitx)** (KJ5DTK, KB2ML, and contributors) — for the outstanding 64-bit fork, and especially for adding browser-microphone SSB transmit in v5.0, the feature this entire app is built around.
 - Inspired by the **Radioberry remote project by VU3ZOF**.
+
+---
+
+## 📥 Download
+
+[![Download APK](https://img.shields.io/github/v/release/vis4573/sbitx-remote?label=%F0%9F%93%A5%20Download%20APK&style=for-the-badge&color=2ea44f)](https://github.com/vis4573/sbitx-remote/releases/latest/download/sbitx-remote.apk)
+
+**[⬇️ Download the latest APK](https://github.com/vis4573/sbitx-remote/releases/latest/download/sbitx-remote.apk)** — always points to the newest release. Browse all versions on the [Releases page](https://github.com/vis4573/sbitx-remote/releases).
 
 ---
 
