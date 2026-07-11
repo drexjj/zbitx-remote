@@ -37,8 +37,9 @@ class RadioService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    var client: SbitxClient? = null
-        private set
+    /** Observable so the UI recomposes when a new connection is created. */
+    val client = kotlinx.coroutines.flow.MutableStateFlow<SbitxClient?>(null)
+
     private val player = RxAudioPlayer()
     private var mic: MicStreamer? = null
 
@@ -51,20 +52,20 @@ class RadioService : Service() {
 
     fun connect(host: String, port: Int, useTls: Boolean, pin: String) {
         // Tear down any previous session
-        client?.shutdown()
+        client.value?.shutdown()
 
         startForegroundCompat()
         player.start()
 
         val c = SbitxClient(host, port, useTls)
-        client = c
+        client.value = c
         scope.launch { c.rxAudio.collect { player.write(it) } }
         c.connect(pin)
     }
 
     /** PTT pressed: switch radio to TX, then stream phone mic continuously. */
     fun pttDown() {
-        val c = client ?: return
+        val c = client.value ?: return
         c.ptt(true)
         if (mic == null) mic = MicStreamer { chunk -> c.sendMicAudio(chunk) }
         mic?.start()
@@ -72,7 +73,7 @@ class RadioService : Service() {
 
     /** PTT released: stop mic (short tail lets buffered audio flush), then RX. */
     fun pttUp() {
-        val c = client ?: return
+        val c = client.value ?: return
         scope.launch {
             delay(150)          // flush tail so last syllable isn't clipped
             mic?.stop()
@@ -83,7 +84,7 @@ class RadioService : Service() {
     fun disconnect() {
         mic?.stop(); mic = null
         player.stop()
-        client?.shutdown(); client = null
+        client.value?.shutdown(); client.value = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -91,7 +92,7 @@ class RadioService : Service() {
     override fun onDestroy() {
         mic?.stop()
         player.stop()
-        client?.shutdown()
+        client.value?.shutdown()
         scope.cancel()
         super.onDestroy()
     }

@@ -18,7 +18,12 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 /**
  * Client for the sBitx (drexjj fork, v5.x) web remote protocol.
@@ -40,17 +45,37 @@ class SbitxClient(
     private val port: Int = 8080,
     private val useTls: Boolean = false,
 ) {
-    enum class ConnState { DISCONNECTED, CONNECTING, LOGIN_SENT, CONNECTED, AUTH_FAILED }
+    enum class ConnState { DISCONNECTED, CONNECTING, LOGIN_SENT, CONNECTED, AUTH_FAILED, ERROR }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var ws: WebSocket? = null
     private var cookie: String = "nullsession"
     private var audioPollJob: Job? = null
 
-    private val http = OkHttpClient.Builder()
+    /** Human-readable reason for the last ERROR/DISCONNECT, for the UI. */
+    val lastError = MutableStateFlow<String?>(null)
+
+    private val http: OkHttpClient = OkHttpClient.Builder()
         .pingInterval(2, TimeUnit.SECONDS)   // server pings every 2s and drops after 5s idle
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
+        .apply {
+            if (useTls) {
+                // The sBitx (drexjj) firmware ships a self-signed certificate on
+                // port 8443 and 302-redirects all non-localhost HTTP traffic to it,
+                // so remote clients MUST use TLS and MUST accept that cert.
+                // Transport privacy over the internet is provided by Tailscale.
+                val trustAll = object : X509TrustManager {
+                    override fun checkClientTrusted(c: Array<X509Certificate>, a: String) {}
+                    override fun checkServerTrusted(c: Array<X509Certificate>, a: String) {}
+                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                }
+                val ssl = SSLContext.getInstance("TLS")
+                ssl.init(null, arrayOf<TrustManager>(trustAll), SecureRandom())
+                sslSocketFactory(ssl.socketFactory, trustAll)
+                hostnameVerifier { _, _ -> true }
+            }
+        }
         .build()
 
     /** Connection state for the UI. */
@@ -64,9 +89,17 @@ class SbitxClient(
     private val _rxAudio = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
     val rxAudio: SharedFlow<ByteArray> = _rxAudio
 
-    /** Console/decode text lines (CW/FT8 decodes etc.). */
-    private val _console = MutableSharedFlow<String>(extraBufferCapacity = 64)
-    val console: SharedFlow<String> = _console
+    /** Parsed console lines: FT8/CW decodes, TX confirmations, logs. */
+    data class ConsoleLine(val kind: String, val line: Int, val text: String)
+
+    private val _console = MutableSharedFlow<ConsoleLine>(extraBufferCapacity = 256)
+    val console: SharedFlow<ConsoleLine> = _console
+
+    // e.g. <WSJTX-RX l="42">102400 -15 0.2 1440 ~ CQ YH1AB OI33</WSJTX-RX>
+    private val consoleTag = Regex(
+        """<([A-Z0-9\-]+)(?:\s+l="(\d+)")?>(.*?)</\1>""",
+        RegexOption.DOT_MATCHES_ALL
+    )
 
     /** Spectrum frames ("RX ..." / "TX ..." ASCII-encoded bins). */
     private val _spectrum = MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -91,6 +124,11 @@ class SbitxClient(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                lastError.value = when {
+                    response?.code == 302 -> "Radio redirected to HTTPS - enable TLS and use port 8443"
+                    else -> t.message ?: "Connection failed"
+                }
+                state.value = ConnState.ERROR
                 teardown()
             }
 
@@ -109,7 +147,8 @@ class SbitxClient(
         audioPollJob?.cancel()
         audioPollJob = null
         ws = null
-        if (state.value != ConnState.AUTH_FAILED) state.value = ConnState.DISCONNECTED
+        if (state.value != ConnState.AUTH_FAILED && state.value != ConnState.ERROR)
+            state.value = ConnState.DISCONNECTED
     }
 
     /** Send any sBitx command, e.g. sendCommand("freq", "7100000") or sendCommand("tx"). */
@@ -138,6 +177,19 @@ class SbitxClient(
 
     fun refresh() = sendCommand("refresh")
 
+    /** Send a raw console line (no field=value), e.g. "key CQ VU3UBP MK68". */
+    fun sendRaw(line: String) {
+        val w = ws ?: return
+        val msg = "$cookie\n$line"
+        if (msg.length <= 99) w.send(msg)
+    }
+
+    /** Queue an FT8 message for transmission in the next time slot. */
+    fun ft8Transmit(message: String) = sendRaw("key " + message.trim() + "\n")
+
+    /** FT8 auto-operate mode: OFF, CQRESP (answer CQs), ANS (answer replies). */
+    fun setFt8Auto(modeStr: String) = sendCommand("FTX_AUTO", modeStr)
+
     /** Stream one chunk of mic PCM (int16 LE @ 8 kHz mono) while transmitting. */
     fun sendMicAudio(pcm: ByteArray) {
         ws?.send(pcm.toByteString())
@@ -163,7 +215,17 @@ class SbitxClient(
                 ws?.close(1000, "server quit")
             }
             text.startsWith("RX ") || text.startsWith("TX ") -> _spectrum.tryEmit(text)
-            text.startsWith("console ") -> _console.tryEmit(text.removePrefix("console "))
+            text.startsWith("CONSOLE ") -> {
+                val payload = text.removePrefix("CONSOLE ")
+                for (m in consoleTag.findAll(payload)) {
+                    val kind = m.groupValues[1]
+                    val line = m.groupValues[2].toIntOrNull() ?: -1
+                    val body = m.groupValues[3]
+                        .replace("&lt;", "<").replace("&gt;", ">")
+                        .replace("&amp;", "&").trim()
+                    if (body.isNotEmpty()) _console.tryEmit(ConsoleLine(kind, line, body))
+                }
+            }
             else -> {
                 // Generic "LABEL value" field update
                 val sp = text.indexOf(' ')
