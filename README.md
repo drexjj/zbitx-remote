@@ -164,7 +164,7 @@ This app stands on the shoulders of some remarkable open-source work:
 
 **⚠️ Use this app at your own risk.** This is experimental software under active testing. The author takes no responsibility for any damage to your radio, amplifier, or other equipment, unintended transmissions, or any other consequences of using this app. Always verify your radio's behaviour (frequency, mode, power) before and during remote operation.
 
-Open source — use, modify, and share freely.
+Open source under the [MIT License](LICENSE) — use, modify, and share freely.
 
 **You are the control operator when transmitting remotely.** Ensure your amateur radio license privileges and local regulations permit remote operation of your station.
 

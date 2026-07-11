@@ -192,7 +192,7 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
             )
         }
         Spacer(Modifier.height(8.dp))
-        Text("Status: $state   •   v0.8", style = MaterialTheme.typography.bodySmall)
+        Text("Status: $state   •   ${com.sbitx.remote.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall)
     }
 }
 

@@ -12,8 +12,9 @@ android {
         applicationId = "com.sbitx.remote"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
-        versionName = "0.8"
+        // CI injects these: -PverCode=N -PrelVersion="v1" or "Beta v1.5"
+        versionCode = (project.findProperty("verCode") as String?)?.toIntOrNull() ?: 1
+        versionName = (project.findProperty("relVersion") as String?) ?: "dev"
     }
 
     buildTypes {
@@ -26,7 +27,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 }
 
 dependencies {

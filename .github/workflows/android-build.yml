@@ -27,8 +27,24 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      # Version numbers: main releases are v1, v2, ... ;
+      # feature/beta builds are v<last>.<run#>, e.g. Beta v1.5
+      - name: Compute versions
+        id: relver
+        run: |
+          git fetch --tags --quiet
+          last=$(git tag -l 'v[0-9]*' | sed 's/^v//' | sort -n | tail -1)
+          last=${last:-0}
+          echo "next=v$(( last + 1 ))" >> "$GITHUB_OUTPUT"
+          echo "beta=v${last}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            gradle assembleDebug --no-daemon -PverCode=${{ github.run_number }} -PrelVersion="${{ steps.relver.outputs.next }}"
+          else
+            gradle assembleDebug --no-daemon -PverCode=${{ github.run_number }} -PrelVersion="Beta ${{ steps.relver.outputs.beta }}"
+          fi
 
       - name: Verify APK integrity
         run: |
@@ -45,15 +61,29 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # Publish the raw .apk on a GitHub (pre)release so it can be downloaded
-      # directly on a phone browser - no artifact zip, no login required.
-      - name: Publish APK to latest-build release
+      # Non-main branches: rolling pre-release for testers.
+      - name: Publish APK to latest-build pre-release
+        if: github.event_name == 'push' && github.ref_name != 'main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-build
-          name: Latest build
+          name: Latest test build
           prerelease: true
           files: sbitx-remote.apk
           body: |
-            Automated debug build from ${{ github.sha }} on ${{ github.ref_name }}.
+            Beta ${{ steps.relver.outputs.beta }} from ${{ github.ref_name }} (${{ github.sha }}).
             Download sbitx-remote.apk below and install directly.
+
+      # Pushes to main (e.g. merged PRs): proper versioned release.
+      - name: Publish versioned release (main)
+        if: github.event_name == 'push' && github.ref_name == 'main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.relver.outputs.next }}
+          name: sBitx Remote ${{ steps.relver.outputs.next }}
+          prerelease: false
+          files: sbitx-remote.apk
+          body: |
+            sBitx Remote ${{ steps.relver.outputs.next }} — built from main (${{ github.sha }}).
+            Download sbitx-remote.apk below and install on Android 8.0+.
+            Requires drexjj/sbitx firmware v5.0+ and Tailscale for internet use. 73 de VU3UBP
