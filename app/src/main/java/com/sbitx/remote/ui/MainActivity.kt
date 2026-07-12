@@ -215,6 +215,17 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
 
         // ================= FIXED HEADER: freq readout + tuning knob =================
         var selectedMult by remember { mutableStateOf(100L) }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("sBitx Remote", style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f))
+            OutlinedButton(
+                onClick = { service.disconnect() },
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF5350)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF5350)),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                modifier = Modifier.height(34.dp)
+            ) { Text("Disconnect", fontSize = 12.sp) }
+        }
         Column(Modifier.fillMaxWidth()) {
             FreqDigits(freq, selectedMult) { selectedMult = it }
             Text("$mode   S: $smeter   step: ${stepName(selectedMult)}",
@@ -280,7 +291,7 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
                 LabeledSlider("Bandwidth", bw, 300..5000, step = 100,
                     modifier = Modifier.weight(1f)) { client.setBandwidth(it) }
                 Spacer(Modifier.width(12.dp))
-                LabeledSlider("IF gain", ifGain, 0..100, modifier = Modifier.weight(1f)) {
+                LabeledSlider("IF", ifGain, 0..100, modifier = Modifier.weight(1f)) {
                     client.setIfGain(it)
                 }
             }
@@ -307,20 +318,14 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
                 }
             }
 
-            OutlinedButton(
-                onClick = { service.disconnect() },
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF5350)),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF5350)),
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Disconnect") }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(4.dp))
         }
 
         // ================= FIXED: knob above PTT =================
         Box(Modifier.fillMaxWidth().padding(top = 4.dp), contentAlignment = Alignment.Center) {
             Box(contentAlignment = Alignment.Center) {
                 TuningKnob(
-                    modifier = Modifier.size(96.dp),
+                    modifier = Modifier.size(132.dp),
                     onDelta = { steps ->
                         val f = (freqNow.value + steps * selectedMult).coerceIn(500_000L, 30_000_000L)
                         client.setFrequency(f)
