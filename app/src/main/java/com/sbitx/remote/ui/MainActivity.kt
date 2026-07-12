@@ -104,7 +104,7 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
     val prefs = remember { ctx.getSharedPreferences("sbitx", Context.MODE_PRIVATE) }
 
     var viaTailscale by remember { mutableStateOf(prefs.getBoolean("viaTailscale", false)) }
-    var localHost by remember { mutableStateOf(prefs.getString("localHost", "192.168.1.11")!!) }
+    var localHost by remember { mutableStateOf(prefs.getString("localHost", "sbitx.local")!!) }
     var tsHost by remember { mutableStateOf(prefs.getString("tsHost", "")!!) }
     var port by remember { mutableStateOf(prefs.getString("port", "8443")!!) }
     var pin by remember { mutableStateOf(prefs.getString("pin", "")!!) }
@@ -215,22 +215,10 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
 
         // ================= FIXED HEADER: freq readout + tuning knob =================
         var selectedMult by remember { mutableStateOf(100L) }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                FreqDigits(freq, selectedMult) { selectedMult = it }
-                Text("$mode   S: $smeter   step: ${stepName(selectedMult)}",
-                    style = MaterialTheme.typography.bodySmall)
-            }
-            Box(contentAlignment = Alignment.Center) {
-                TuningKnob(
-                    modifier = Modifier.size(92.dp),
-                    onDelta = { steps ->
-                        val f = (freqNow.value + steps * selectedMult).coerceIn(500_000L, 30_000_000L)
-                        client.setFrequency(f)
-                    }
-                )
-                Text("↺ ↻", fontSize = 14.sp, color = Color(0x66FFFFFF))
-            }
+        Column(Modifier.fillMaxWidth()) {
+            FreqDigits(freq, selectedMult) { selectedMult = it }
+            Text("$mode   S: $smeter   step: ${stepName(selectedMult)}",
+                style = MaterialTheme.typography.bodySmall)
         }
         Spacer(Modifier.height(4.dp))
 
@@ -238,15 +226,13 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
         Column(
             Modifier.weight(1f).verticalScroll(rememberScrollState())
         ) {
-            // ---- One-line tuning: -10 -1 [kHz] Go +1 +10 ----
+            // ---- Frequency entry ----
             var freqText by remember { mutableStateOf("") }
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                TuneBtn("-10") { client.setFrequency(freq - 1000) }
-                TuneBtn("-1") { client.setFrequency(freq - 100) }
                 OutlinedTextField(
                     freqText, { freqText = it },
                     label = { Text("kHz", fontSize = 10.sp) },
@@ -257,8 +243,6 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
                 TuneBtn("Go") {
                     freqText.toDoubleOrNull()?.let { client.setFrequency((it * 1000).toLong()) }
                 }
-                TuneBtn("+1") { client.setFrequency(freq + 100) }
-                TuneBtn("+10") { client.setFrequency(freq + 1000) }
             }
             Spacer(Modifier.height(4.dp))
 
@@ -282,12 +266,13 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
             }
 
             // ---- Sliders (paired to fit one screen) ----
+            val ifGain = fields["IF"]?.toIntOrNull() ?: 60
             Row(Modifier.fillMaxWidth()) {
-                LabeledSlider("Volume", vol, 0..100, modifier = Modifier.weight(1f)) {
+                LabeledSlider("sBitx volume", vol, 0..100, modifier = Modifier.weight(1f)) {
                     client.setVolume(it)
                 }
                 Spacer(Modifier.width(12.dp))
-                LabeledSlider("Drive", drive, 1..100, modifier = Modifier.weight(1f)) {
+                LabeledSlider("TX drive", drive, 1..100, modifier = Modifier.weight(1f)) {
                     client.setDrive(it)
                 }
             }
@@ -295,37 +280,55 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
                 LabeledSlider("Bandwidth", bw, 300..5000, step = 100,
                     modifier = Modifier.weight(1f)) { client.setBandwidth(it) }
                 Spacer(Modifier.width(12.dp))
-                // ---- AINR: only on capable firmware, voice modes only ----
-                val ainr = fields["AINR"]
-                val digital = mode in listOf("FT8", "FT4", "DIGI", "DIGITAL", "2TONE")
-                if (ainr != null && !digital) {
-                    val ainrs = fields["AINRS"]?.toIntOrNull() ?: 80
-                    Column(Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("AINR", fontSize = 11.sp, modifier = Modifier.weight(1f))
-                            Switch(
-                                checked = ainr == "ON",
-                                onCheckedChange = { client.setAinr(it) },
-                                modifier = Modifier.height(26.dp)
-                            )
-                        }
-                        if (ainr == "ON") {
-                            LabeledSlider("Strength", ainrs, 0..100, step = 5) {
-                                client.setAinrStrength(it)
-                            }
-                        }
+                LabeledSlider("IF gain", ifGain, 0..100, modifier = Modifier.weight(1f)) {
+                    client.setIfGain(it)
+                }
+            }
+            // ---- AINR: only on capable firmware, voice modes only ----
+            val ainr = fields["AINR"]
+            val digital = mode in listOf("FT8", "FT4", "DIGI", "DIGITAL", "2TONE")
+            if (ainr != null && !digital) {
+                val ainrs = fields["AINRS"]?.toIntOrNull() ?: 80
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("AINR", fontSize = 11.sp)
+                    Spacer(Modifier.width(8.dp))
+                    Switch(
+                        checked = ainr == "ON",
+                        onCheckedChange = { client.setAinr(it) },
+                        modifier = Modifier.height(26.dp)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    if (ainr == "ON") {
+                        LabeledSlider("Strength", ainrs, 0..100, step = 5,
+                            modifier = Modifier.weight(1f)) { client.setAinrStrength(it) }
+                    } else {
+                        Spacer(Modifier.weight(1f))
                     }
-                } else {
-                    Spacer(Modifier.weight(1f))
                 }
             }
 
-            OutlinedButton(onClick = { service.disconnect() }, modifier = Modifier.fillMaxWidth()) {
-                Text("Disconnect")
-            }
+            OutlinedButton(
+                onClick = { service.disconnect() },
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF5350)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF5350)),
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Disconnect") }
             Spacer(Modifier.height(8.dp))
         }
 
+        // ================= FIXED: knob above PTT =================
+        Box(Modifier.fillMaxWidth().padding(top = 4.dp), contentAlignment = Alignment.Center) {
+            Box(contentAlignment = Alignment.Center) {
+                TuningKnob(
+                    modifier = Modifier.size(96.dp),
+                    onDelta = { steps ->
+                        val f = (freqNow.value + steps * selectedMult).coerceIn(500_000L, 30_000_000L)
+                        client.setFrequency(f)
+                    }
+                )
+                Text("↺ ↻", fontSize = 14.sp, color = Color(0x66FFFFFF))
+            }
+        }
         // ================= FIXED PTT (hidden in FT8 - TX is slot-based) =================
         if (mode != "FT8" && mode != "FT4") Box(
             Modifier
