@@ -175,6 +175,13 @@ class SbitxClient(
 
     fun ptt(on: Boolean) = sendCommand(if (on) "tx" else "rx")
 
+    /** AINR: RNNoise neural noise reduction (vis4573/sbitx firmware). */
+    fun setAinr(on: Boolean) = sendCommand("ainr", if (on) "ON" else "OFF")
+
+    /** AINR strength 0-100 (step 5). Takes ~1 s to apply on the radio. */
+    fun setAinrStrength(n: Int) =
+        sendCommand("ainrs", ((n.coerceIn(0, 100) / 5) * 5).toString())
+
     fun refresh() = sendCommand("refresh")
 
     /** Send a raw console line (no field=value), e.g. "key CQ VU3UBP MK68". */

@@ -271,6 +271,26 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
             Spacer(Modifier.height(0.dp))
             LabeledSlider("Mic gain", mic, 0..100) { client.setMicGain(it) }
             LabeledSlider("Volume", vol, 0..100) { client.setVolume(it) }
+
+            // ---- AINR (neural noise reduction) - only if firmware supports it,
+            // and only in voice modes (firmware bypasses it for digital) ----
+            val ainr = fields["AINR"]          // present only on AINR-capable firmware
+            val digital = mode in listOf("FT8", "FT4", "DIGI", "DIGITAL", "2TONE")
+            if (ainr != null && !digital) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("AINR (noise reduction)", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = ainr == "ON",
+                        onCheckedChange = { client.setAinr(it) }
+                    )
+                }
+                if (ainr == "ON") {
+                    val ainrs = fields["AINRS"]?.toIntOrNull() ?: 80
+                    LabeledSlider("AINR strength (70-85 for SSB)", ainrs, 0..100, step = 5) {
+                        client.setAinrStrength(it)
+                    }
+                }
+            }
             LabeledSlider("Drive (power)", drive, 1..100) { client.setDrive(it) }
             LabeledSlider("Bandwidth", bw, 300..5000, step = 100) { client.setBandwidth(it) }
 
