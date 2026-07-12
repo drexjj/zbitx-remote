@@ -256,7 +256,7 @@ class SbitxClient(
         audioPollJob = scope.launch {
             while (state.value == ConnState.CONNECTED) {
                 sendCommand("audio")
-                delay(80)
+                delay(50)
             }
         }
     }
