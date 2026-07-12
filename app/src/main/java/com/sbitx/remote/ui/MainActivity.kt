@@ -267,32 +267,44 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
                 Spacer(Modifier.height(6.dp))
             }
 
-            // ---- Sliders ----
-            Spacer(Modifier.height(0.dp))
-            LabeledSlider("Mic gain", mic, 0..100) { client.setMicGain(it) }
-            LabeledSlider("Volume", vol, 0..100) { client.setVolume(it) }
-
-            // ---- AINR (neural noise reduction) - only if firmware supports it,
-            // and only in voice modes (firmware bypasses it for digital) ----
-            val ainr = fields["AINR"]          // present only on AINR-capable firmware
-            val digital = mode in listOf("FT8", "FT4", "DIGI", "DIGITAL", "2TONE")
-            if (ainr != null && !digital) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("AINR (noise reduction)", fontSize = 13.sp, modifier = Modifier.weight(1f))
-                    Switch(
-                        checked = ainr == "ON",
-                        onCheckedChange = { client.setAinr(it) }
-                    )
+            // ---- Sliders (paired to fit one screen) ----
+            Row(Modifier.fillMaxWidth()) {
+                LabeledSlider("Volume", vol, 0..100, modifier = Modifier.weight(1f)) {
+                    client.setVolume(it)
                 }
-                if (ainr == "ON") {
-                    val ainrs = fields["AINRS"]?.toIntOrNull() ?: 80
-                    LabeledSlider("AINR strength (70-85 for SSB)", ainrs, 0..100, step = 5) {
-                        client.setAinrStrength(it)
-                    }
+                Spacer(Modifier.width(12.dp))
+                LabeledSlider("Drive", drive, 1..100, modifier = Modifier.weight(1f)) {
+                    client.setDrive(it)
                 }
             }
-            LabeledSlider("Drive (power)", drive, 1..100) { client.setDrive(it) }
-            LabeledSlider("Bandwidth", bw, 300..5000, step = 100) { client.setBandwidth(it) }
+            Row(Modifier.fillMaxWidth()) {
+                LabeledSlider("Bandwidth", bw, 300..5000, step = 100,
+                    modifier = Modifier.weight(1f)) { client.setBandwidth(it) }
+                Spacer(Modifier.width(12.dp))
+                // ---- AINR: only on capable firmware, voice modes only ----
+                val ainr = fields["AINR"]
+                val digital = mode in listOf("FT8", "FT4", "DIGI", "DIGITAL", "2TONE")
+                if (ainr != null && !digital) {
+                    val ainrs = fields["AINRS"]?.toIntOrNull() ?: 80
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("AINR", fontSize = 11.sp, modifier = Modifier.weight(1f))
+                            Switch(
+                                checked = ainr == "ON",
+                                onCheckedChange = { client.setAinr(it) },
+                                modifier = Modifier.height(26.dp)
+                            )
+                        }
+                        if (ainr == "ON") {
+                            LabeledSlider("Strength", ainrs, 0..100, step = 5) {
+                                client.setAinrStrength(it)
+                            }
+                        }
+                    }
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+            }
 
             OutlinedButton(onClick = { service.disconnect() }, modifier = Modifier.fillMaxWidth()) {
                 Text("Disconnect")
@@ -399,16 +411,19 @@ fun BandDropdown(modifier: Modifier = Modifier, onSelect: (String) -> Unit) {
 }
 
 @Composable
-fun LabeledSlider(label: String, value: Int, range: IntRange, step: Int = 1, onSet: (Int) -> Unit) {
+fun LabeledSlider(
+    label: String, value: Int, range: IntRange, step: Int = 1,
+    modifier: Modifier = Modifier, onSet: (Int) -> Unit
+) {
     var local by remember(value) { mutableFloatStateOf(value.toFloat()) }
-    Column {
-        Text("$label: ${local.toInt()}", fontSize = 13.sp)
+    Column(modifier) {
+        Text("$label: ${local.toInt()}", fontSize = 11.sp)
         Slider(
             value = local,
             onValueChange = { local = it },
             onValueChangeFinished = { onSet((local.toInt() / step) * step) },
             valueRange = range.first.toFloat()..range.last.toFloat(),
-            modifier = Modifier.height(30.dp)
+            modifier = Modifier.height(26.dp)
         )
     }
 }
@@ -654,13 +669,16 @@ fun FreqEntryRow(onGo: (Long) -> Unit) {
     var text by remember { mutableStateOf("") }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
-            text, { text = it }, label = { Text("Frequency in kHz (e.g. 7100)") },
-            singleLine = true, modifier = Modifier.weight(1f)
+            text, { text = it }, label = { Text("kHz", fontSize = 11.sp) },
+            singleLine = true,
+            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp),
+            modifier = Modifier.width(140.dp).height(52.dp)
         )
-        Spacer(Modifier.width(8.dp))
-        Button(onClick = {
+        Spacer(Modifier.width(6.dp))
+        OutlinedButton(onClick = {
             text.toDoubleOrNull()?.let { onGo((it * 1000).toLong()) }
-        }) { Text("Go") }
+        }, contentPadding = PaddingValues(horizontal = 12.dp)) { Text("Go", fontSize = 12.sp) }
+        Spacer(Modifier.weight(1f))
     }
 }
 
