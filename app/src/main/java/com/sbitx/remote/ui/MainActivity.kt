@@ -310,8 +310,12 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
                     )
                     Spacer(Modifier.width(12.dp))
                     if (ainr == "ON") {
+                        val ainrv = fields["AINRV"]?.toIntOrNull() ?: 25
                         LabeledSlider("Strength", ainrs, 0..100, step = 5,
                             modifier = Modifier.weight(1f)) { client.setAinrStrength(it) }
+                        Spacer(Modifier.width(10.dp))
+                        LabeledSlider("Relax", ainrv, 0..50, step = 5,
+                            modifier = Modifier.weight(1f)) { client.setAinrRelax(it) }
                     } else {
                         Spacer(Modifier.weight(1f))
                     }

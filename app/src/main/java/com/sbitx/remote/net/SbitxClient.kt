@@ -162,7 +162,9 @@ class SbitxClient(
     fun setFrequency(hz: Long) = sendCommand("freq", hz.toString())
     fun setMode(mode: String) = sendCommand("mode", mode)          // USB/LSB/CW/CWR/AM/FT8/...
     fun setMicGain(g: Int) = sendCommand("mic", g.coerceIn(0, 100).toString())
-    fun setVolume(v: Int) = sendCommand("audio", v.coerceIn(0, 100).toString())
+    // NOTE: must be uppercase - lowercase "audio" is the webserver's reserved
+    // keyword for requesting the RX audio stream and never reaches the field.
+    fun setVolume(v: Int) = sendCommand("AUDIO", v.coerceIn(0, 100).toString())
     fun setDrive(d: Int) = sendCommand("drive", d.coerceIn(1, 100).toString())
     fun setBandwidth(hz: Int) = sendCommand("bw", hz.toString())
     fun setAgc(agc: String) = sendCommand("agc", agc)              // OFF/SLOW/MED/FAST
@@ -181,6 +183,10 @@ class SbitxClient(
     /** AINR strength 0-100 (step 5). Takes ~1 s to apply on the radio. */
     fun setAinrStrength(n: Int) =
         sendCommand("ainrs", ((n.coerceIn(0, 100) / 5) * 5).toString())
+
+    /** AINR VAD relax depth 0-50 (step 5). */
+    fun setAinrRelax(n: Int) =
+        sendCommand("ainrv", ((n.coerceIn(0, 50) / 5) * 5).toString())
 
     fun refresh() = sendCommand("refresh")
 
