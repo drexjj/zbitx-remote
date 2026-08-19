@@ -18,6 +18,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.asImageBitmap
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -103,7 +104,7 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
     val prefs = remember { ctx.getSharedPreferences("sbitx", Context.MODE_PRIVATE) }
 
     var viaTailscale by remember { mutableStateOf(prefs.getBoolean("viaTailscale", false)) }
-    var localHost by remember { mutableStateOf(prefs.getString("localHost", "192.168.1.11")!!) }
+    var localHost by remember { mutableStateOf(prefs.getString("localHost", "sbitx.local")!!) }
     var tsHost by remember { mutableStateOf(prefs.getString("tsHost", "")!!) }
     var port by remember { mutableStateOf(prefs.getString("port", "8443")!!) }
     var pin by remember { mutableStateOf(prefs.getString("pin", "")!!) }
@@ -215,18 +216,20 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
         // ================= FIXED HEADER: freq readout + tuning knob =================
         var selectedMult by remember { mutableStateOf(100L) }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                FreqDigits(freq, selectedMult) { selectedMult = it }
-                Text("$mode   S: $smeter   step: ${stepName(selectedMult)}",
-                    style = MaterialTheme.typography.bodySmall)
-            }
-            TuningKnob(
-                modifier = Modifier.size(92.dp),
-                onDelta = { steps ->
-                    val f = (freqNow.value + steps * selectedMult).coerceIn(500_000L, 30_000_000L)
-                    client.setFrequency(f)
-                }
-            )
+            Text("sBitx Remote", style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f))
+            OutlinedButton(
+                onClick = { service.disconnect() },
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF5350)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF5350)),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                modifier = Modifier.height(34.dp)
+            ) { Text("Disconnect", fontSize = 12.sp) }
+        }
+        Column(Modifier.fillMaxWidth()) {
+            FreqDigits(freq, selectedMult) { selectedMult = it }
+            Text("$mode   S: $smeter   step: ${stepName(selectedMult)}",
+                style = MaterialTheme.typography.bodySmall)
         }
         Spacer(Modifier.height(4.dp))
 
@@ -234,32 +237,38 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
         Column(
             Modifier.weight(1f).verticalScroll(rememberScrollState())
         ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                listOf(-1000L, -100L, +100L, +1000L).forEach { d ->
-                    OutlinedButton(
-                        onClick = { client.setFrequency(freq + d) },
-                        contentPadding = PaddingValues(horizontal = 10.dp)
-                    ) { Text(if (d > 0) "+${d / 100}" else "${d / 100}") }
-                }
-            }
-            FreqEntryRow { client.setFrequency(it) }
-            Spacer(Modifier.height(6.dp))
-
-            // ---- Band (dropdown) + Mode ----
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                BandDropdown(Modifier.weight(1f)) { client.setBand(it) }
-            }
-            Spacer(Modifier.height(6.dp))
+            // ---- Frequency entry ----
+            var freqText by remember { mutableStateOf("") }
             Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                listOf("LSB", "USB", "CW", "AM", "FT8").forEach { m ->
-                    FilterChip(selected = mode == m, onClick = { client.setMode(m) },
-                        label = { Text(m) })
+                OutlinedTextField(
+                    freqText, { freqText = it },
+                    label = { Text("kHz", fontSize = 10.sp) },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
+                    modifier = Modifier.weight(1f).height(52.dp)
+                )
+                TuneBtn("Go") {
+                    freqText.toDoubleOrNull()?.let { client.setFrequency((it * 1000).toLong()) }
                 }
             }
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(4.dp))
+
+            // ---- Band + Mode in one line ----
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BandDropdown(Modifier.weight(1f)) { client.setBand(it) }
+                ModeDropdown(Modifier.weight(1f), mode) { client.setMode(it) }
+            }
+            Spacer(Modifier.height(4.dp))
+
+            // ---- Waterfall (hidden in FT8/digital - the console needs the space) ----
+            if (mode !in listOf("FT8", "FT4", "DIGI", "DIGITAL")) {
+                Waterfall(client, Modifier.fillMaxWidth().height(120.dp))
+                Spacer(Modifier.height(4.dp))
+            }
 
             // ---- FT8 console (visible in FT8 mode) ----
             if (mode == "FT8" || mode == "FT4") {
@@ -267,19 +276,68 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
                 Spacer(Modifier.height(6.dp))
             }
 
-            // ---- Sliders ----
-            Spacer(Modifier.height(0.dp))
-            LabeledSlider("Mic gain", mic, 0..100) { client.setMicGain(it) }
-            LabeledSlider("Volume", vol, 0..100) { client.setVolume(it) }
-            LabeledSlider("Drive (power)", drive, 1..100) { client.setDrive(it) }
-            LabeledSlider("Bandwidth", bw, 300..5000, step = 100) { client.setBandwidth(it) }
-
-            OutlinedButton(onClick = { service.disconnect() }, modifier = Modifier.fillMaxWidth()) {
-                Text("Disconnect")
+            // ---- Sliders (paired to fit one screen) ----
+            val ifGain = fields["IF"]?.toIntOrNull() ?: 60
+            Row(Modifier.fillMaxWidth()) {
+                LabeledSlider("sBitx volume", vol, 0..100, modifier = Modifier.weight(1f)) {
+                    client.setVolume(it)
+                }
+                Spacer(Modifier.width(12.dp))
+                LabeledSlider("TX drive", drive, 1..100, modifier = Modifier.weight(1f)) {
+                    client.setDrive(it)
+                }
             }
-            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth()) {
+                LabeledSlider("Bandwidth", bw, 300..5000, step = 100,
+                    modifier = Modifier.weight(1f)) { client.setBandwidth(it) }
+                Spacer(Modifier.width(12.dp))
+                LabeledSlider("IF", ifGain, 0..100, modifier = Modifier.weight(1f)) {
+                    client.setIfGain(it)
+                }
+            }
+            // ---- AINR: only on capable firmware, voice modes only ----
+            val ainr = fields["AINR"]
+            val digital = mode in listOf("FT8", "FT4", "DIGI", "DIGITAL", "2TONE")
+            if (ainr != null && !digital) {
+                val ainrs = fields["AINRS"]?.toIntOrNull() ?: 80
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("AINR", fontSize = 11.sp)
+                    Spacer(Modifier.width(8.dp))
+                    Switch(
+                        checked = ainr == "ON",
+                        onCheckedChange = { client.setAinr(it) },
+                        modifier = Modifier.height(26.dp)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    if (ainr == "ON") {
+                        val ainrv = fields["AINRV"]?.toIntOrNull() ?: 25
+                        LabeledSlider("Strength", ainrs, 0..100, step = 5,
+                            modifier = Modifier.weight(1f)) { client.setAinrStrength(it) }
+                        Spacer(Modifier.width(10.dp))
+                        LabeledSlider("Relax", ainrv, 0..50, step = 5,
+                            modifier = Modifier.weight(1f)) { client.setAinrRelax(it) }
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
         }
 
+        // ================= FIXED: knob above PTT =================
+        Box(Modifier.fillMaxWidth().padding(top = 4.dp), contentAlignment = Alignment.Center) {
+            Box(contentAlignment = Alignment.Center) {
+                TuningKnob(
+                    modifier = Modifier.size(132.dp),
+                    onDelta = { steps ->
+                        val f = (freqNow.value + steps * selectedMult).coerceIn(500_000L, 30_000_000L)
+                        client.setFrequency(f)
+                    }
+                )
+                Text("↺ ↻", fontSize = 14.sp, color = Color(0x66FFFFFF))
+            }
+        }
         // ================= FIXED PTT (hidden in FT8 - TX is slot-based) =================
         if (mode != "FT8" && mode != "FT4") Box(
             Modifier
@@ -379,16 +437,19 @@ fun BandDropdown(modifier: Modifier = Modifier, onSelect: (String) -> Unit) {
 }
 
 @Composable
-fun LabeledSlider(label: String, value: Int, range: IntRange, step: Int = 1, onSet: (Int) -> Unit) {
+fun LabeledSlider(
+    label: String, value: Int, range: IntRange, step: Int = 1,
+    modifier: Modifier = Modifier, onSet: (Int) -> Unit
+) {
     var local by remember(value) { mutableFloatStateOf(value.toFloat()) }
-    Column {
-        Text("$label: ${local.toInt()}", fontSize = 13.sp)
+    Column(modifier) {
+        Text("$label: ${local.toInt()}", fontSize = 11.sp)
         Slider(
             value = local,
             onValueChange = { local = it },
             onValueChangeFinished = { onSet((local.toInt() / step) * step) },
             valueRange = range.first.toFloat()..range.last.toFloat(),
-            modifier = Modifier.height(30.dp)
+            modifier = Modifier.height(26.dp)
         )
     }
 }
@@ -630,18 +691,103 @@ fun renderDecorated(text: String, kind: String):
 }
 
 @Composable
-fun FreqEntryRow(onGo: (Long) -> Unit) {
-    var text by remember { mutableStateOf("") }
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            text, { text = it }, label = { Text("Frequency in kHz (e.g. 7100)") },
-            singleLine = true, modifier = Modifier.weight(1f)
-        )
-        Spacer(Modifier.width(8.dp))
-        Button(onClick = {
-            text.toDoubleOrNull()?.let { onGo((it * 1000).toLong()) }
-        }) { Text("Go") }
+fun TuneBtn(label: String, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+        modifier = Modifier.height(40.dp)
+    ) { Text(label, fontSize = 12.sp) }
+}
+
+@Composable
+fun ModeDropdown(modifier: Modifier = Modifier, current: String, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier) {
+        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text("Mode: $current  ▾")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            listOf("LSB", "USB", "CW", "CWR", "AM", "FT8").forEach { m ->
+                DropdownMenuItem(text = { Text(m) }, onClick = {
+                    expanded = false; onSelect(m)
+                })
+            }
+        }
     }
+}
+
+/**
+ * Scrolling waterfall rendered from the firmware's spectrum frames:
+ * "RX " + one ASCII char per ~47 Hz bin, magnitude = char - 32 (0..95).
+ * Center of the display = the tuned frequency.
+ */
+@Composable
+fun Waterfall(client: SbitxClient, modifier: Modifier = Modifier) {
+    val rowsN = 80
+    var bins by remember { mutableStateOf(0) }
+    var bmp by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    val pixels = remember { java.util.concurrent.atomic.AtomicReference(IntArray(0)) }
+    var tick by remember { mutableStateOf(0) }
+
+    LaunchedEffect(client) {
+        client.spectrum.collect { line ->
+            if (!line.startsWith("RX ")) return@collect   // skip TX envelope frames
+            val data = line.substring(3)
+            val n = data.length
+            if (n < 16) return@collect
+            var px = pixels.get()
+            if (n != bins) {
+                bins = n
+                px = IntArray(n * rowsN)
+                pixels.set(px)
+                bmp = android.graphics.Bitmap.createBitmap(
+                    n, rowsN, android.graphics.Bitmap.Config.ARGB_8888)
+            }
+            System.arraycopy(px, n, px, 0, n * (rowsN - 1))
+            val base = n * (rowsN - 1)
+            for (x in 0 until n) {
+                val v = (data[x].code - 32).coerceIn(0, 95)
+                px[base + x] = heatColor(v)
+            }
+            bmp?.setPixels(px, 0, n, 0, 0, n, rowsN)
+            tick++
+        }
+    }
+
+    Box(modifier.background(Color(0xFF0A0E14))) {
+        val b = bmp
+        if (b != null && tick > 0) {
+            androidx.compose.foundation.Image(
+                bitmap = b.asImageBitmap(),
+                contentDescription = "waterfall",
+                contentScale = androidx.compose.ui.layout.ContentScale.FillBounds,
+                filterQuality = androidx.compose.ui.graphics.FilterQuality.None,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        // center-frequency marker
+        androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+            drawLine(
+                Color(0x88FF5252),
+                start = Offset(size.width / 2f, 0f),
+                end = Offset(size.width / 2f, size.height),
+                strokeWidth = 2f
+            )
+        }
+    }
+}
+
+/** 0..95 -> black -> blue -> cyan -> yellow -> white heat map. */
+fun heatColor(v: Int): Int {
+    val t = v / 95f
+    val r: Int; val g: Int; val b: Int
+    when {
+        t < 0.25f -> { val k = t / 0.25f; r = 0; g = 0; b = (k * 180).toInt() }
+        t < 0.5f  -> { val k = (t - 0.25f) / 0.25f; r = 0; g = (k * 200).toInt(); b = 180 + (k * 75).toInt() }
+        t < 0.75f -> { val k = (t - 0.5f) / 0.25f; r = (k * 255).toInt(); g = 200 + (k * 55).toInt(); b = (255 * (1 - k)).toInt() }
+        else      -> { val k = (t - 0.75f) / 0.25f; r = 255; g = 255; b = (k * 255).toInt() }
+    }
+    return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
 }
 
 fun formatFreq(hz: Long): String {
