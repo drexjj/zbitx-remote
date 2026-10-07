@@ -1,23 +1,25 @@
-# 📻 sBitx Remote
+# 📻 zBitx Remote
 
-**A native Android app for operating your sBitx transceiver from anywhere in the world.**
+**A native Android app for operating a zBitx QRP transceiver from anywhere.**
 
-Full remote control over the internet — tune the bands, work SSB with your phone's microphone, and listen to live receiver audio, whether you're in the next room or another country.
+Tune the bands, work SSB with your phone's microphone, run FT8 and CW, and listen to live receiver audio — over your LAN or over Tailscale.
 
-Created by **VU3UBP**
+Forked from [vis4573/sbitx-remote](https://github.com/vis4573/sbitx-remote) (VU3UBP) and adapted to the zBitx software ([drexjj/zbitx](https://github.com/drexjj/zbitx)).
 
 ---
 
 ## ✨ Features
 
-- 🎙️ **Remote SSB voice** — hold-to-talk PTT streams your phone's microphone straight into the radio's TX chain
-- 🔊 **Live RX audio** — low-latency receiver audio with a jitter buffer tuned for mobile networks
-- 📶 **Frequency control** — direct entry, ±100 Hz / ±1 kHz nudge buttons, big monospace readout
-- 🎛️ **Full radio control** — mode (LSB/USB/CW/AM/FT8), band dropdown (80m–10m), tap-a-digit tuning with rotary knob, mic gain, volume, drive (TX power), bandwidth, S-meter
-- 📟 **FT8 operating panel** — live color-coded decodes streamed from the radio (decoding runs on the sBitx), tap a station to grab their call, one-tap standard messages (CQ with custom modifier like DX/POTA, Call, Report, RR73, 73)
-- 🌐 **Two connection profiles** — one tap to switch between your home LAN and Tailscale over the internet, with all settings remembered
-- 🔒 **TLS support** — works with the firmware's HTTPS (port 8443) out of the box, self-signed certificate included
-- 📱 **Background-safe** — a foreground service keeps the QSO alive when the screen turns off
+- 🎙️ **Remote SSB voice** — hold-to-talk PTT streams the phone mic into the zBitx browser-mic path; the button turns red only when the radio confirms it is on the air
+- 🔊 **Live RX audio** — 16 kHz receiver audio with a jitter buffer tuned for mobile networks; muted while you transmit so the speaker can't feed back
+- 🌊 **Waterfall + spectrum** — correct orientation, passband overlay from the radio's LOW/HIGH filter, **tap to tune**, **drag to pan**, span selector
+- 📶 **Frequency control** — tap a digit then turn the knob, direct kHz entry, VFO A/B, lock, split
+- 🎛️ **zBitx controls** — 80 m–10 m incl. 60 m, USB/LSB/AM/CW/CWR/FT8/DIGI, volume, IF gain, drive, bandwidth, compressor, AGC, ANR / DSP / NOTCH, TUNE
+- 📏 **Meters** — S-meter on receive, forward power and SWR on transmit
+- 📟 **FT8** — colour-coded decodes; **tap a decode and the radio runs the QSO** (same as the zBitx web UI), auto mode, CQ, Stop, free-text messages
+- ⌨️ **CW** — decoded text, type-to-send through the radio's keyer, WPM and pitch
+- 🔁 **Auto-reconnect** — rides out Wi-Fi/cellular drops with backoff; if the link dies while keyed, the radio is unkeyed as soon as it comes back
+- 📱 **Background-safe** — a foreground service keeps the session alive with the screen off
 
 ---
 
@@ -25,157 +27,64 @@ Created by **VU3UBP**
 
 | Component | Requirement |
 |---|---|
-| Radio | sBitx (v2/v3/DE) with Raspberry Pi |
-| **Firmware** | **[drexjj/sbitx](https://github.com/drexjj/sbitx) 64-bit, v5.0 or newer** — required |
+| Radio | zBitx (Raspberry Pi Zero 2 W + RP2040 front panel) |
+| Software | [drexjj/zbitx](https://github.com/drexjj/zbitx) with the web server on port 8443 |
 | Phone | Android 8.0+ |
-| Remote access | [Tailscale](https://tailscale.com) (free tier is plenty) |
-
-> ⚠️ **The official (afarhan) firmware will not work for voice.** Remote SSB transmit from a browser/phone microphone was introduced in the drexjj fork at v5.0. The stock firmware only supports FT8/CW remotely. Flash the drexjj 64-bit image first — and back up your `sbitx/data` and `sbitx/web` folders before upgrading.
+| Remote access | Same LAN, or [Tailscale](https://tailscale.com) for the internet |
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick start
 
-### 1. Flash the firmware
-Install the [drexjj/sbitx](https://github.com/drexjj/sbitx) 64-bit image (v5.0+) on your radio's Raspberry Pi. See their wiki for the full upgrade guide.
+1. On the radio, press **SET** and note the **PASSKEY** (case-sensitive).
+2. Check the web UI works from a laptop: `https://zbitx.local:8443` (accept the self-signed certificate).
+3. Install the APK on your phone (Releases page, or the CI artifact from any branch).
+4. In the app: **Local network**, address `zbitx.local` (or its IP), port `8443`, TLS on, your passkey → **Connect**.
+5. For use away from home, install Tailscale on the Pi (`scripts/sbitx-remote-setup.sh` does it in one step) and on the phone, then pick **Tailscale (internet)** and enter the Pi's `100.x.y.z` address.
 
-### 2. Set your PIN
-On the radio, press **SET** and set/confirm the web access PIN. Verify the web UI works locally first: browse to `https://sbitx.local:8443` from a laptop on the same network, accept the certificate warning, and log in.
-
-### 3. Set up Tailscale on the sBitx
-
-**Easiest: the one-time setup script** (in `scripts/` of this repo). It installs Tailscale, joins your tailnet without any browser login on the radio, enables Tailscale SSH for remote recovery, survives reboots, and fixes WiFi power-save (a common cause of remote Pis dropping offline).
-
-1. Generate an auth key at `https://login.tailscale.com/admin/settings/keys` (single-use, tick "Pre-approved" if shown)
-2. Copy the script to the radio and run it:
-
-```bash
-# from your laptop, in this repo's folder:
-scp scripts/sbitx-remote-setup.sh pi@sbitx.local:/home/pi/
-
-ssh pi@sbitx.local
-sudo bash /home/pi/sbitx-remote-setup.sh tskey-auth-XXXXXXXXXXXX
-```
-
-3. Note the Tailscale IP it prints (`100.x.y.z`) — that goes in the app
-4. **Final step, once, from any browser:** `https://login.tailscale.com/admin/machines` → **sbitx** → ⋯ → **Disable key expiry**. This makes the setup permanent; without it the radio drops off the tailnet after ~180 days.
-
-<details>
-<summary>Manual setup (if you prefer doing it by hand)</summary>
-
-SSH into the radio's Raspberry Pi (or open a terminal on it directly):
-
-```bash
-ssh pi@sbitx.local        # default password is hf12345 — change it!
-```
-
-Install and start Tailscale:
-
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
-```
-
-The `tailscale up` command prints a login URL — open it in any browser and sign in (Google/Microsoft/GitHub accounts all work). The radio is now part of your private "tailnet."
-
-Get the radio's Tailscale address:
-
-```bash
-tailscale ip -4        # e.g. 100.101.102.103
-```
-
-Optional but recommended — make Tailscale start on every boot:
-
-```bash
-sudo systemctl enable --now tailscaled
-```
-</details>
-
-### 4. Set up Tailscale on your phone
-Install the **Tailscale** app from the Play Store, sign in with the **same account**, and flip the VPN toggle on. You should see your sBitx listed as a device.
-
-### 5. Install sBitx Remote
-Download the latest APK directly on your phone: **[sbitx-remote.apk](https://github.com/vis4573/sbitx-remote/releases/latest/download/sbitx-remote.apk)** (or via the [Releases](../../releases) page) and install it (allow "install unknown apps" if prompted).
-
-### 6. Connect and operate
-- **At home:** choose **Local network**, enter the radio's LAN IP, port `8443`, TLS on, your PIN → Connect
-- **Anywhere else:** turn on the Tailscale app, choose **Tailscale (internet)**, enter the radio's `100.x.y.z` address → Connect
-
-Hold the big green button to talk. Release to listen. That's it. 🎉
+> zBitx allows **one remote session at a time**. Logging in from the web UI on another device ends the app's session (and vice versa); the app tells you when that happens.
 
 ---
 
-## 🔧 How it works
+## 🔧 How it talks to zBitx
 
-The app speaks the drexjj firmware's native WebSocket protocol directly — the same one its web interface uses:
+The app speaks the same WebSocket protocol as the zBitx web UI (`src/webserver.c`, `web/index.html`):
 
-- A single WebSocket (`wss://<radio>:8443/websocket`) carries everything: login, control commands, telemetry, and audio in both directions
-- Control uses the sBitx text command set (`freq=`, `mode=`, `mic=`, `tx`/`rx`, …)
-- **RX audio** arrives as binary PCM frames (16-bit, 16 kHz mono) and plays through `AudioTrack`
-- **TX voice** is captured at 8 kHz from the phone mic and streamed in 50 ms chunks; the firmware upsamples it 12× into the 96 kHz SSB transmit chain
-- Tailscale provides an encrypted WireGuard tunnel, so the radio is never exposed to the open internet
-
-```
-┌─────────────┐   WireGuard    ┌──────────────┐   WebSocket   ┌────────────┐
-│   Android   │◄──(Tailscale)──►│ Raspberry Pi │◄────(TLS)────►│  sBitx SDR │
-│  this app   │    internet    │ drexjj v5.x  │   localhost   │  hardware  │
-└─────────────┘                └──────────────┘               └────────────┘
-```
-
----
-
-## 🛠️ Building from source
-
-Open the project in Android Studio (Hedgehog+) and run, or let GitHub Actions build it — every push produces an installable debug APK on the [Releases](../../releases) page.
+- `wss://<radio>:8443/websocket` carries login, commands, telemetry and audio. Plain port 8080 is redirected to HTTPS for anything but localhost.
+- Commands are `<cookie>\n<command>`, max 99 chars, run through `cmd_exec()` on the Pi. The command word must be at least 2 characters or the radio drops the connection, which is why PTT is sent as `t ` / `r `.
+- RX audio: int16 PCM, 16 kHz mono, returned for each `audio` poll (every 50 ms).
+- TX audio: int16 PCM, 8 kHz mono in 32 ms frames. The radio falls back to its own mic after 100 ms without a frame, and does **not** apply its MIC gain to remote audio — use the app's *Phone mic* slider (COMP and TX EQ still apply).
+- Spectrum: `RX `/`TX ` frames, 46.875 Hz per bin, highest frequency first.
+- Console: `CONSOLE <WSJTX-RX>…</WSJTX-RX><CW-RX>…` tags, entity-escaped, possibly split across frames.
 
 ```
 app/src/main/java/com/sbitx/remote/
-  net/SbitxClient.kt       WebSocket protocol client
+  net/SbitxClient.kt       WebSocket protocol client + reconnect
   audio/RxAudioPlayer.kt   16 kHz RX playback
-  audio/MicStreamer.kt     8 kHz PTT mic capture
-  service/RadioService.kt  Foreground service
-  ui/MainActivity.kt       Jetpack Compose UI
+  audio/MicStreamer.kt     8 kHz PTT mic capture, gain + soft clip
+  service/RadioService.kt  Foreground service, PTT sequencing
+  ui/MainActivity.kt       Connect screen and main radio panel
+  ui/Widgets.kt            Waterfall, meters, knob, FT8 and CW consoles
 ```
 
 ---
 
-## 🗺️ Roadmap
+## 🛠️ Building
 
-- [ ] Spectrum / waterfall display
-- [x] FT8 console with standard messages
-- [ ] CW keyboard console
-- [ ] Logbook viewer
-- [ ] Auto-reconnect with backoff
-- [ ] VFO A/B, RIT, split controls in UI
+Open in Android Studio (Hedgehog+) and run, or push a branch — GitHub Actions builds an installable debug APK for every push.
 
 ---
 
 ## 🙏 Acknowledgements
 
-This app stands on the shoulders of some remarkable open-source work:
-
-- **[Ashhar Farhan, VU2ESE](https://github.com/afarhan/sbitx)** — creator of the sBitx and the original open-source radio software that started it all. The sBitx's "hackable HF SDR" philosophy is what makes projects like this possible.
-- **[W9JES and the drexjj/sbitx team](https://github.com/drexjj/sbitx)** (KJ5DTK, KB2ML, and contributors) — for the outstanding 64-bit fork, and especially for adding browser-microphone SSB transmit in v5.0, the feature this entire app is built around.
-- Inspired by the **Radioberry remote project by VU3ZOF**.
+- **VU3UBP** — original sBitx Remote app this is built on.
+- **Ashhar Farhan, VU2ESE** — creator of the sBitx and its open-source software.
+- **W9JES and the drexjj team** — the sBitx 64-bit fork and browser-mic SSB transmit that zBitx inherits.
 
 ---
 
-## 📥 Download
+## ⚖️ Disclaimer & license
 
-[![Download APK](https://img.shields.io/github/v/release/vis4573/sbitx-remote?label=%F0%9F%93%A5%20Download%20APK&style=for-the-badge&color=2ea44f)](https://github.com/vis4573/sbitx-remote/releases/latest/download/sbitx-remote.apk)
+Use at your own risk. **You are the control operator when transmitting remotely** — make sure your licence and local rules allow remote operation, and verify frequency, mode and power before transmitting.
 
-**[⬇️ Download the latest APK](https://github.com/vis4573/sbitx-remote/releases/latest/download/sbitx-remote.apk)** — always points to the newest release. Browse all versions on the [Releases page](https://github.com/vis4573/sbitx-remote/releases).
-
----
-
-## ⚖️ Disclaimer, license & operating note
-
-**⚠️ Use this app at your own risk.** This is experimental software under active testing. The author takes no responsibility for any damage to your radio, amplifier, or other equipment, unintended transmissions, or any other consequences of using this app. Always verify your radio's behaviour (frequency, mode, power) before and during remote operation.
-
-Open source under the [MIT License](LICENSE) — use, modify, and share freely.
-
-**You are the control operator when transmitting remotely.** Ensure your amateur radio license privileges and local regulations permit remote operation of your station.
-
----
-
-*73 de VU3UBP* 📡
+MIT License — see [LICENSE](LICENSE).

@@ -26,45 +26,76 @@ import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
 /**
- * Client for the sBitx (drexjj fork, v5.x) web remote protocol.
+ * Client for the zBitx web remote protocol (src/webserver.c + web/index.html
+ * in github.com/drexjj/zbitx). Everything below was checked against that code.
  *
- * Protocol (derived from src/webserver.c in github.com/drexjj/sbitx):
- *  - Single WebSocket at ws://<host>:8080/websocket (or wss://<host>:8443/websocket)
- *  - TEXT frames, client -> radio:  "<cookie>\n<field>=<value>"  (max 99 chars)
- *      - login:            "nullsession\nlogin=<PIN>"
- *      - any radio command: field/value passed to remote_execute(), e.g. "freq=7100000"
- *      - keywords: refresh / spectrum / audio / logbook / macros_list
- *  - TEXT frames, radio -> client: "LABEL value" lines (e.g. "FREQ 7100000",
- *      "SMETER 5 3", "STATUS 2026/07/07 12:00:00Z", "login <cookie>", "login error",
- *      "quit <reason>", spectrum frames starting with "RX "/"TX ")
- *  - BINARY frames, radio -> client: int16 little-endian PCM, 16 kHz mono (RX audio)
- *  - BINARY frames, client -> radio: int16 little-endian PCM, 8 kHz mono (browser/phone mic)
+ *  - One WebSocket at wss://<host>:8443/websocket (port 8080 plain HTTP only
+ *    works from localhost; anything else gets a 302 to https://zbitx.local:8443).
+ *  - TEXT client -> radio: "<cookie>\n<command>", 99 chars max.
+ *      The server splits <command> at the first '=' into field/value and hands
+ *      "field value" to cmd_exec(), so "freq=7074000" and "freq 7074000" are
+ *      equivalent. The FIELD PART MUST BE 2+ CHARS or the server replies
+ *      "quit Illformed request" and drops the socket - which is why the zBitx
+ *      web UI keys the radio with "t " / "r " (note the trailing space).
+ *      Reserved exact-match keywords: login, audio, spectrum, refresh, logbook,
+ *      macros_list, BFO. Volume must therefore be sent as "AUDIO", never "audio".
+ *  - TEXT radio -> client: "LABEL value" (FREQ, MODE, SMETER s db, POWER, REF,
+ *      ZEROBEAT, STATUS, ...), "login <cookie>" / "login error",
+ *      "quit <reason>", "RX <bins>" / "TX <envelope>" spectrum frames, and
+ *      "CONSOLE <WSJTX-RX>..</WSJTX-RX><CW-RX>..</CW-RX>..." (XML-ish, entity
+ *      escaped, no line ids, and a tag may be split across two frames).
+ *  - BINARY radio -> client: int16 LE PCM, 16 kHz mono (sent only in reply to "audio").
+ *  - BINARY client -> radio: int16 LE PCM, 8 kHz mono browser mic. The radio
+ *      falls back to its own mic if no frame arrives for 100 ms.
+ *  - zBitx keeps ONE session cookie: a login from any other device invalidates
+ *      ours and the next request is answered with "quit expired".
  */
 class SbitxClient(
     private val host: String,
-    private val port: Int = 8080,
-    private val useTls: Boolean = false,
+    private val port: Int = 8443,
+    private val useTls: Boolean = true,
 ) {
-    enum class ConnState { DISCONNECTED, CONNECTING, LOGIN_SENT, CONNECTED, AUTH_FAILED, ERROR }
+    enum class ConnState {
+        DISCONNECTED, CONNECTING, LOGIN_SENT, CONNECTED,
+        /** Link dropped after a good session; retrying with backoff. */
+        RECONNECTING,
+        AUTH_FAILED,
+        /** The radio ended the session (another login, malformed request). Not retried. */
+        SESSION_ENDED,
+        ERROR
+    }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var ws: WebSocket? = null
-    private var cookie: String = "nullsession"
+    @Volatile private var ws: WebSocket? = null
+    @Volatile private var cookie: String = "nullsession"
     private var audioPollJob: Job? = null
+    private var reconnectJob: Job? = null
+    private var pin: String = ""
 
-    /** Human-readable reason for the last ERROR/DISCONNECT, for the UI. */
+    @Volatile private var userClosed = false
+    @Volatile private var everConnected = false
+    @Volatile private var reconnectAttempt = 0
+    /** Set when the link drops while the radio was keyed, so we can unkey on reconnect. */
+    @Volatile private var unkeyOnReconnect = false
+
+    /** True while the user is holding PTT in this app. */
+    @Volatile var pttHeld = false
+        private set
+
+    /** Human-readable reason for the last ERROR / SESSION_ENDED / RECONNECTING. */
     val lastError = MutableStateFlow<String?>(null)
 
     private val http: OkHttpClient = OkHttpClient.Builder()
-        .pingInterval(2, TimeUnit.SECONDS)   // server pings every 2s and drops after 5s idle
-        .connectTimeout(6, TimeUnit.SECONDS)
+        // We poll "audio" every 50 ms, which already keeps the server's 5 s idle
+        // timer happy. This ping only detects a dead link; 2 s was so aggressive
+        // that a brief cellular stall tore the session down.
+        .pingInterval(5, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .apply {
             if (useTls) {
-                // The sBitx (drexjj) firmware ships a self-signed certificate on
-                // port 8443 and 302-redirects all non-localhost HTTP traffic to it,
-                // so remote clients MUST use TLS and MUST accept that cert.
-                // Transport privacy over the internet is provided by Tailscale.
+                // zBitx ships a self-signed certificate for port 8443. Transport
+                // privacy over the internet comes from Tailscale.
                 val trustAll = object : X509TrustManager {
                     override fun checkClientTrusted(c: Array<X509Certificate>, a: String) {}
                     override fun checkServerTrusted(c: Array<X509Certificate>, a: String) {}
@@ -78,28 +109,32 @@ class SbitxClient(
         }
         .build()
 
-    /** Connection state for the UI. */
     val state = MutableStateFlow(ConnState.DISCONNECTED)
 
-    /** Parsed "LABEL value" field updates (FREQ, MODE, MIC, DRIVE, SMETER, ...). */
+    /** Latest value of every "LABEL value" update (FREQ, MODE, MIC, DRIVE, SMETER, ...). */
     private val _fields = MutableStateFlow<Map<String, String>>(emptyMap())
     val fields: StateFlow<Map<String, String>> = _fields
+
+    /** True while the radio reports TX spectrum frames, i.e. it is really on the air. */
+    private val _onAir = MutableStateFlow(false)
+    val onAir: StateFlow<Boolean> = _onAir
 
     /** Raw RX PCM (int16 LE @ 16 kHz mono) frames from the radio. */
     private val _rxAudio = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
     val rxAudio: SharedFlow<ByteArray> = _rxAudio
 
-    /** Parsed console lines: FT8/CW decodes, TX confirmations, logs. */
-    data class ConsoleLine(val kind: String, val line: Int, val text: String)
+    /**
+     * One console entry. [kind] is the zBitx tag: WSJTX-RX, WSJTX-TX, WSJTX-Q,
+     * CW-RX, CW-TX, FLDIGI-RX, FLDIGI-TX, TELNET or LOG. [text] still carries
+     * the firmware's "#X" colour markup (see hist_disp.c).
+     */
+    data class ConsoleLine(val kind: String, val text: String)
 
-    private val _console = MutableSharedFlow<ConsoleLine>(extraBufferCapacity = 256)
+    private val _console = MutableSharedFlow<ConsoleLine>(extraBufferCapacity = 512)
     val console: SharedFlow<ConsoleLine> = _console
 
-    // e.g. <WSJTX-RX l="42">102400 -15 0.2 1440 ~ CQ YH1AB OI33</WSJTX-RX>
-    private val consoleTag = Regex(
-        """<([A-Z0-9\-]+)(?:\s+l="(\d+)")?>(.*?)</\1>""",
-        RegexOption.DOT_MATCHES_ALL
-    )
+    private val consoleTag = Regex("""<([A-Z0-9\-]+)>(.*?)</\1>""", RegexOption.DOT_MATCHES_ALL)
+    private val consoleCarry = StringBuilder()
 
     /** Spectrum frames ("RX ..." / "TX ..." ASCII-encoded bins). */
     private val _spectrum = MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -107,145 +142,219 @@ class SbitxClient(
 
     fun connect(pin: String) {
         if (state.value == ConnState.CONNECTING || state.value == ConnState.CONNECTED) return
-        state.value = ConnState.CONNECTING
+        this.pin = pin
+        userClosed = false
+        everConnected = false
+        reconnectAttempt = 0
+        lastError.value = null
+        open(ConnState.CONNECTING)
+    }
+
+    private fun open(newState: ConnState) {
+        state.value = newState
         val scheme = if (useTls) "wss" else "ws"
         val req = Request.Builder().url("$scheme://$host:$port/websocket").build()
         ws = http.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (webSocket !== ws) return
                 cookie = "nullsession"
+                synchronized(consoleCarry) { consoleCarry.setLength(0) }
                 webSocket.send("nullsession\nlogin=$pin")
-                state.value = ConnState.LOGIN_SENT
+                if (state.value != ConnState.RECONNECTING) state.value = ConnState.LOGIN_SENT
             }
 
-            override fun onMessage(webSocket: WebSocket, text: String) = handleText(text)
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                if (webSocket === ws) handleText(text)
+            }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                _rxAudio.tryEmit(bytes.toByteArray())
+                if (webSocket === ws) _rxAudio.tryEmit(bytes.toByteArray())
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                lastError.value = when {
-                    response?.code == 302 -> "Radio redirected to HTTPS - enable TLS and use port 8443"
+                if (webSocket !== ws) return
+                val reason = when {
+                    response?.code == 302 ->
+                        "The radio redirected to HTTPS - turn on TLS and use port 8443"
                     else -> t.message ?: "Connection failed"
                 }
-                state.value = ConnState.ERROR
-                teardown()
+                linkLost(reason)
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                webSocket.close(1000, null)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                teardown()
+                if (webSocket !== ws) return
+                linkLost(reason.ifBlank { "Connection closed by the radio" })
             }
         })
     }
 
-    fun disconnect() {
-        ws?.close(1000, "bye")
-        teardown()
+    /** The socket is gone. Decide between retrying, reporting an error, or staying down. */
+    private fun linkLost(reason: String) {
+        stopAudioPolling()
+        ws = null
+        if (_onAir.value || pttHeld) unkeyOnReconnect = true
+        _onAir.value = false
+        when {
+            userClosed -> state.value = ConnState.DISCONNECTED
+            state.value == ConnState.AUTH_FAILED || state.value == ConnState.SESSION_ENDED -> Unit
+            everConnected -> scheduleReconnect(reason)
+            else -> {
+                lastError.value = reason
+                state.value = ConnState.ERROR
+            }
+        }
     }
 
-    private fun teardown() {
-        audioPollJob?.cancel()
-        audioPollJob = null
+    private fun scheduleReconnect(reason: String) {
+        reconnectJob?.cancel()
+        val waitS = listOf(1, 2, 4, 8, 15)[reconnectAttempt.coerceAtMost(4)]
+        reconnectAttempt++
+        lastError.value = "Link lost ($reason) - retrying in ${waitS}s"
+        state.value = ConnState.RECONNECTING
+        reconnectJob = scope.launch {
+            delay(waitS * 1000L)
+            if (!userClosed && state.value == ConnState.RECONNECTING) open(ConnState.RECONNECTING)
+        }
+    }
+
+    fun disconnect() {
+        userClosed = true
+        reconnectJob?.cancel()
+        stopAudioPolling()
+        if (pttHeld || _onAir.value) runCatching { sendRaw("r ") }
+        pttHeld = false
+        ws?.close(1000, "bye")
         ws = null
-        if (state.value != ConnState.AUTH_FAILED && state.value != ConnState.ERROR)
+        _onAir.value = false
+        if (state.value != ConnState.AUTH_FAILED && state.value != ConnState.SESSION_ENDED)
             state.value = ConnState.DISCONNECTED
     }
 
-    /** Send any sBitx command, e.g. sendCommand("freq", "7100000") or sendCommand("tx"). */
+    // ---------------------------------------------------------------- sending
+
+    /** Send "field=value" (or a bare keyword when value is empty). Field must be 2+ chars. */
     fun sendCommand(field: String, value: String = "") {
-        val w = ws ?: return
-        val msg = "$cookie\n$field=$value"
-        if (msg.length <= 99) w.send(msg)     // server rejects >99 chars
+        if (field.length < 2) return            // the radio would drop the socket
+        send(if (value.isEmpty()) field else "$field=$value")
     }
 
-    // --- Convenience wrappers for standard radio features ---
+    /** Send a raw command line exactly as the zBitx web UI would, e.g. "t " or "FT8 ...". */
+    fun sendRaw(line: String) = send(line)
+
+    private fun send(command: String) {
+        val w = ws ?: return
+        val msg = "$cookie\n$command"
+        if (msg.length <= 99) w.send(msg)       // server ignores frames > 99 chars
+    }
+
+    // --- Standard radio controls (labels from main_controls[] in sbitx_gtk.c) ---
     fun setFrequency(hz: Long) = sendCommand("freq", hz.toString())
-    fun setMode(mode: String) = sendCommand("mode", mode)          // USB/LSB/CW/CWR/AM/FT8/...
-    fun setMicGain(g: Int) = sendCommand("mic", g.coerceIn(0, 100).toString())
-    // NOTE: must be uppercase - lowercase "audio" is the webserver's reserved
-    // keyword for requesting the RX audio stream and never reaches the field.
+    fun setMode(mode: String) = sendCommand("MODE", mode)          // USB/LSB/AM/CW/CWR/FT8/DIGI/2TONE
+    fun setMicGain(g: Int) = sendCommand("MIC", g.coerceIn(0, 50).toString())
     fun setVolume(v: Int) = sendCommand("AUDIO", v.coerceIn(0, 100).toString())
-    fun setDrive(d: Int) = sendCommand("drive", d.coerceIn(1, 100).toString())
-    fun setBandwidth(hz: Int) = sendCommand("bw", hz.toString())
-    fun setAgc(agc: String) = sendCommand("agc", agc)              // OFF/SLOW/MED/FAST
-    fun setIfGain(g: Int) = sendCommand("if", g.toString())
-    fun setBand(band: String) = sendCommand(band, "")              // "80M", "40M", "20M", ...
-    fun setVfo(vfo: String) = sendCommand("vfo", vfo)              // A / B
-    fun setStep(step: String) = sendCommand("step", step)          // 10K/1K/100H/10H
-    fun setRit(on: Boolean) = sendCommand("rit", if (on) "ON" else "OFF")
-    fun setSplit(on: Boolean) = sendCommand("split", if (on) "ON" else "OFF")
+    fun setDrive(d: Int) = sendCommand("DRIVE", d.coerceIn(0, 100).toString())
+    fun setBandwidth(hz: Int) = sendCommand("BW", hz.coerceIn(50, 5000).toString())
+    fun setAgc(agc: String) = sendCommand("AGC", agc)              // OFF/SLOW/MED/FAST
+    fun setIfGain(g: Int) = sendCommand("IF", g.coerceIn(0, 100).toString())
+    fun setBand(band: String) = sendCommand(band)                  // "80M" ... "10M"
+    fun setVfo(vfo: String) = sendCommand("VFO", vfo)              // A / B
+    fun setSpan(span: String) = sendCommand("SPAN", span)          // 25K/10K/8K/6K/2.5K
+    fun setRit(on: Boolean) = setToggle("RIT", on)
+    fun setSplit(on: Boolean) = setToggle("SPLIT", on)
+    fun setPitch(hz: Int) = sendCommand("PITCH", hz.coerceIn(100, 3000).toString())
+    fun setTxPitch(hz: Int) = sendCommand("TX_PITCH", hz.coerceIn(100, 4000).toString())
+    fun setWpm(wpm: Int) = sendCommand("WPM", wpm.coerceIn(1, 50).toString())
+    fun setComp(level: Int) = sendCommand("COMP", level.coerceIn(0, 10).toString())
 
-    fun ptt(on: Boolean) = sendCommand(if (on) "tx" else "rx")
+    /** zBitx ON/OFF toggles: ANR, DSP, NOTCH, TXEQ, RXEQ, VFOLK, FT8_AUTO, ... */
+    fun setToggle(label: String, on: Boolean) = sendCommand(label, if (on) "ON" else "OFF")
 
-    /** AINR: RNNoise neural noise reduction (vis4573/sbitx firmware). */
-    fun setAinr(on: Boolean) = sendCommand("ainr", if (on) "ON" else "OFF")
+    /** Key / unkey exactly the way the zBitx web UI does ("t " / "r "). */
+    fun ptt(on: Boolean) {
+        pttHeld = on
+        sendRaw(if (on) "t " else "r ")
+    }
 
-    /** AINR strength 0-100 (step 5). Takes ~1 s to apply on the radio. */
-    fun setAinrStrength(n: Int) =
-        sendCommand("ainrs", ((n.coerceIn(0, 100) / 5) * 5).toString())
+    /** Antenna tune carrier at TNPWR for TNDUR seconds (radio auto-stops). */
+    fun tune(on: Boolean) = sendCommand("TUNE", if (on) "ON" else "OFF")
 
-    /** AINR VAD relax depth 0-50 (step 5). */
-    fun setAinrRelax(n: Int) =
-        sendCommand("ainrv", ((n.coerceIn(0, 50) / 5) * 5).toString())
+    /** Stop any transmission/macro in progress (same as the web UI's abort). */
+    fun abortTx() = sendCommand("abort", "1")
 
     fun refresh() = sendCommand("refresh")
 
-    /** Send a raw console line (no field=value), e.g. "key CQ VU3UBP MK68". */
-    fun sendRaw(line: String) {
-        val w = ws ?: return
-        val msg = "$cookie\n$line"
-        if (msg.length <= 99) w.send(msg)
+    /** Type text into the radio's keyboard buffer - CW messages are sent from there. */
+    fun sendKeys(text: String) {
+        // keep each frame under the 99-char limit
+        text.chunked(60).forEach { sendRaw("key $it") }
     }
 
-    /** Queue an FT8 message for transmission in the next time slot. */
+    /** Queue a free-form FT8 message for the next slot (web UI's FT8_transmit()). */
     fun ft8Transmit(message: String) = sendRaw("key " + message.trim() + "\n")
 
-    /** FT8 auto-operate mode: OFF, CQRESP (answer CQs), ANS (answer replies). */
-    fun setFt8Auto(modeStr: String) = sendCommand("FTX_AUTO", modeStr)
+    /**
+     * Start (or resume) an FT8 QSO from a decode line, exactly like tapping it in
+     * the zBitx web UI: the radio's ft8_process() fills in the logger and runs
+     * the exchange itself (with FT8_AUTO on it also logs the contact).
+     * [decodeText] is the raw console text, markup included.
+     */
+    fun ft8Reply(decodeText: String) {
+        val normalized = normalizeFt8(decodeText) ?: return
+        abortTx()
+        sendRaw("FT8 $normalized")
+    }
+
+    fun setFt8Auto(on: Boolean) = setToggle("FT8_AUTO", on)
 
     /** Stream one chunk of mic PCM (int16 LE @ 8 kHz mono) while transmitting. */
     fun sendMicAudio(pcm: ByteArray) {
         ws?.send(pcm.toByteString())
     }
 
+    // -------------------------------------------------------------- receiving
+
     private fun handleText(text: String) {
-        // Multiple logical messages may arrive; the console can also contain newlines.
         when {
             text.startsWith("login ") -> {
                 val v = text.removePrefix("login ").trim()
                 if (v == "error") {
+                    lastError.value = "The radio rejected the PIN"
                     state.value = ConnState.AUTH_FAILED
                     ws?.close(1000, "auth failed")
                 } else {
+                    val wasReconnect = state.value == ConnState.RECONNECTING
                     cookie = v
+                    everConnected = true
+                    reconnectAttempt = 0
+                    lastError.value = null
                     state.value = ConnState.CONNECTED
-                    refresh()
+                    // Safety: if the link died while we were keyed, the radio keeps
+                    // transmitting (on its own mic). Unkey unless PTT is still held.
+                    if (wasReconnect && unkeyOnReconnect && !pttHeld) sendRaw("r ")
+                    unkeyOnReconnect = false
                     startAudioPolling()
                 }
             }
-            text.startsWith("quit ") -> {
-                state.value = ConnState.DISCONNECTED
+            text.startsWith("quit") -> {
+                val reason = text.removePrefix("quit").trim()
+                lastError.value = when (reason) {
+                    "expired" -> "Another device logged in to the radio. zBitx allows one remote session at a time."
+                    else -> "The radio ended the session: $reason"
+                }
+                state.value = ConnState.SESSION_ENDED
                 ws?.close(1000, "server quit")
             }
-            text.startsWith("RX ") || text.startsWith("TX ") -> _spectrum.tryEmit(text)
-            text.startsWith("CONSOLE ") -> {
-                val payload = text.removePrefix("CONSOLE ")
-                for (m in consoleTag.findAll(payload)) {
-                    val kind = m.groupValues[1]
-                    val line = m.groupValues[2].toIntOrNull() ?: -1
-                    val body = m.groupValues[3]
-                        .replace("&lt;", "<").replace("&gt;", ">")
-                        .replace("&amp;", "&").trim()
-                    if (body.isNotEmpty()) _console.tryEmit(ConsoleLine(kind, line, body))
-                }
-            }
+            text.startsWith("RX ") -> { _onAir.value = false; _spectrum.tryEmit(text) }
+            text.startsWith("TX ") -> { _onAir.value = true; _spectrum.tryEmit(text) }
+            text.startsWith("CONSOLE ") -> parseConsole(text.removePrefix("CONSOLE "))
             else -> {
-                // Generic "LABEL value" field update
                 val sp = text.indexOf(' ')
                 if (sp > 0) {
-                    val label = text.substring(0, sp)
-                    val value = text.substring(sp + 1)
-                    _fields.value = _fields.value + (label to value)
+                    _fields.value = _fields.value + (text.substring(0, sp) to text.substring(sp + 1))
                 } else if (text.isNotBlank()) {
                     _fields.value = _fields.value + (text to "")
                 }
@@ -253,12 +362,31 @@ class SbitxClient(
         }
     }
 
-    /**
-     * The radio only pushes RX audio in response to "audio" requests
-     * (see get_audio() in webserver.c), so poll continuously while connected.
-     */
+    /** Console frames are capped at 2000 chars, so a tag can straddle two frames. */
+    private fun parseConsole(payload: String) {
+        val buf: String
+        synchronized(consoleCarry) {
+            consoleCarry.append(payload)
+            buf = consoleCarry.toString()
+            consoleCarry.setLength(0)
+        }
+        var consumed = 0
+        for (m in consoleTag.findAll(buf)) {
+            consumed = m.range.last + 1
+            val body = decodeEntities(m.groupValues[2])
+            if (body.isNotBlank()) _console.tryEmit(ConsoleLine(m.groupValues[1], body))
+        }
+        // keep an unfinished tag for the next frame (bounded, in case of garbage)
+        val rest = buf.substring(consumed)
+        val open = rest.indexOf('<')
+        if (open >= 0 && rest.length - open < 4000)
+            synchronized(consoleCarry) { consoleCarry.append(rest, open, rest.length) }
+    }
+
     private fun startAudioPolling() {
         audioPollJob?.cancel()
+        // The radio only sends RX audio (and fresh spectrum/fields) in reply
+        // to "audio", so poll at the same 50 ms cadence as the web UI's ui_tick().
         audioPollJob = scope.launch {
             while (state.value == ConnState.CONNECTED) {
                 sendCommand("audio")
@@ -267,9 +395,38 @@ class SbitxClient(
         }
     }
 
+    private fun stopAudioPolling() {
+        audioPollJob?.cancel()
+        audioPollJob = null
+    }
+
     fun shutdown() {
         disconnect()
         scope.cancel()
         http.dispatcher.executorService.shutdown()
+    }
+
+    companion object {
+        fun decodeEntities(s: String): String = s
+            .replace("&#xA;", "\n").replace("&#xa;", "\n").replace("&#10;", "\n")
+            .replace("&lt;", "<").replace("&gt;", ">")
+            .replace("&quot;", "\"").replace("&apos;", "'")
+            .replace("&amp;", "&")
+
+        /** Remove the firmware's "#X" colour markup. */
+        fun stripMarkup(s: String): String = s.replace(Regex("#."), "")
+
+        /**
+         * Turn a decode into the token string the radio's ft8_message_tokenize()
+         * expects: "time conf snr pitch ~ m1 m2 [m3 [m4]]". Mirrors the web UI's
+         * FT8_message_chosen() (non-word characters other than - and ~ become
+         * spaces). Returns null if the line isn't a decode.
+         */
+        fun normalizeFt8(decodeText: String): String? {
+            val plain = stripMarkup(decodeText).replace(Regex("""[^\w\-~]+"""), " ").trim()
+            val tokens = plain.split(Regex("""\s+"""))
+            if (tokens.size < 7 || tokens.size > 9 || tokens[4] != "~") return null
+            return tokens.joinToString(" ")
+        }
     }
 }

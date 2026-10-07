@@ -53,9 +53,16 @@ class RxAudioPlayer {
             .also { it.play() }
     }
 
+    /**
+     * While transmitting from the phone mic, drop RX audio so the phone speaker
+     * can't feed back into the mic (the zBitx web UI clears its RX buffer on TX too).
+     */
+    @Volatile var muted = false
+
     /** Feed a binary frame straight from the WebSocket. */
     fun write(pcm: ByteArray) {
         val t = track ?: return
+        if (muted) return
         var data = pcm
 
         // Backlog supervision: frames queued = written - played

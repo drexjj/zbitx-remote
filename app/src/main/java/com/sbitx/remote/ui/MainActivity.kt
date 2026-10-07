@@ -6,28 +6,16 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.clickable
-import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.asImageBitmap
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.sin
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -37,14 +25,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.sbitx.remote.net.SbitxClient
+import com.sbitx.remote.net.SbitxClient.ConnState
 import com.sbitx.remote.service.RadioService
+import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
 
@@ -57,15 +49,19 @@ class MainActivity : ComponentActivity() {
         override fun onServiceDisconnected(name: ComponentName?) { service = null }
     }
 
-    private val micPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private val permissions =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
-        ) micPermission.launch(Manifest.permission.RECORD_AUDIO)
+        val wanted = buildList {
+            add(Manifest.permission.RECORD_AUDIO)
+            if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+        }.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (wanted.isNotEmpty()) permissions.launch(wanted.toTypedArray())
 
         val svcIntent = Intent(this, RadioService::class.java)
         startService(svcIntent)
@@ -89,22 +85,25 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AppRoot(service: RadioService?) {
     val client = service?.client?.collectAsState()?.value
-    val state = client?.state?.collectAsState()?.value ?: SbitxClient.ConnState.DISCONNECTED
+    val state = client?.state?.collectAsState()?.value ?: ConnState.DISCONNECTED
 
-    if (state == SbitxClient.ConnState.CONNECTED && client != null && service != null) {
-        RadioPanel(client, service)
+    // Stay on the radio panel while auto-reconnecting so the operator keeps context.
+    if ((state == ConnState.CONNECTED || state == ConnState.RECONNECTING) &&
+        client != null && service != null
+    ) {
+        RadioPanel(client, service, state)
     } else {
         ConnectScreen(service, state, client)
     }
 }
 
 @Composable
-fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: SbitxClient?) {
+fun ConnectScreen(service: RadioService?, state: ConnState, client: SbitxClient?) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { ctx.getSharedPreferences("sbitx", Context.MODE_PRIVATE) }
 
     var viaTailscale by remember { mutableStateOf(prefs.getBoolean("viaTailscale", false)) }
-    var localHost by remember { mutableStateOf(prefs.getString("localHost", "sbitx.local")!!) }
+    var localHost by remember { mutableStateOf(prefs.getString("localHost", "zbitx.local")!!) }
     var tsHost by remember { mutableStateOf(prefs.getString("tsHost", "")!!) }
     var port by remember { mutableStateOf(prefs.getString("port", "8443")!!) }
     var pin by remember { mutableStateOf(prefs.getString("pin", "")!!) }
@@ -112,14 +111,13 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
     val lastError = client?.lastError?.collectAsState()?.value
 
     Column(
-        Modifier.fillMaxSize().padding(24.dp),
+        Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("sBitx Remote", style = MaterialTheme.typography.headlineMedium)
+        Text("zBitx Remote", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(20.dp))
 
-        // --- Connection method selector ---
         Text("Connect via", style = MaterialTheme.typography.labelLarge)
         Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -137,7 +135,7 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
         if (viaTailscale) {
             OutlinedTextField(tsHost, { tsHost = it },
                 label = { Text("Tailscale IP / MagicDNS name") },
-                placeholder = { Text("100.x.y.z or sbitx.tailxxxx.ts.net") },
+                placeholder = { Text("100.x.y.z or zbitx.tailxxxx.ts.net") },
                 singleLine = true, modifier = Modifier.fillMaxWidth())
             Text(
                 "Make sure the Tailscale app is connected on this phone",
@@ -146,22 +144,26 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
             )
         } else {
             OutlinedTextField(localHost, { localHost = it },
-                label = { Text("Radio local IP") },
-                placeholder = { Text("192.168.1.11") },
+                label = { Text("Radio address") },
+                placeholder = { Text("zbitx.local or 192.168.1.11") },
                 singleLine = true, modifier = Modifier.fillMaxWidth())
         }
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(port, { port = it }, label = { Text("Port (8443)") },
-            singleLine = true, modifier = Modifier.fillMaxWidth())
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(pin, { pin = it }, label = { Text("PIN") },
+        OutlinedTextField(pin, { pin = it }, label = { Text("Passkey (SET → PASSKEY on the radio)") },
             singleLine = true, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(useTls, { useTls = it })
-            Text("Use TLS (required by drexjj firmware, port 8443)")
+            Text("Use TLS (zBitx requires it for remote clients, port 8443)",
+                style = MaterialTheme.typography.bodySmall)
         }
         Spacer(Modifier.height(16.dp))
+        val busy = state == ConnState.CONNECTING || state == ConnState.LOGIN_SENT
         Button(
             onClick = {
                 val host = (if (viaTailscale) tsHost else localHost).trim()
@@ -175,68 +177,113 @@ fun ConnectScreen(service: RadioService?, state: SbitxClient.ConnState, client: 
                     .apply()
                 service?.connect(host, port.trim().toIntOrNull() ?: 8443, useTls, pin.trim())
             },
-            enabled = service != null && state != SbitxClient.ConnState.CONNECTING &&
+            enabled = service != null && !busy &&
                 (if (viaTailscale) tsHost.isNotBlank() else localHost.isNotBlank()),
             modifier = Modifier.fillMaxWidth().height(52.dp)
-        ) { Text(if (state == SbitxClient.ConnState.CONNECTING || state == SbitxClient.ConnState.LOGIN_SENT) "Connecting…" else "Connect") }
-
-        if (state == SbitxClient.ConnState.AUTH_FAILED) {
-            Spacer(Modifier.height(12.dp))
-            Text("Login failed — check your PIN", color = MaterialTheme.colorScheme.error)
-        }
-        if (state == SbitxClient.ConnState.ERROR) {
-            Spacer(Modifier.height(12.dp))
+        ) {
             Text(
-                lastError ?: "Connection failed — check host/port and that you're on the same network or Tailscale",
-                color = MaterialTheme.colorScheme.error,
-                textAlign = TextAlign.Center
+                when {
+                    busy -> "Connecting…"
+                    state == ConnState.SESSION_ENDED -> "Reconnect (takes over the session)"
+                    else -> "Connect"
+                }
             )
         }
+
+        val msg = when (state) {
+            ConnState.AUTH_FAILED -> "Login failed - check the passkey (SET → PASSKEY on the radio, case-sensitive)"
+            ConnState.SESSION_ENDED -> lastError ?: "The radio ended the session"
+            ConnState.ERROR -> lastError
+                ?: "Connection failed - check address/port and that you're on the same network or Tailscale"
+            else -> null
+        }
+        if (msg != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(msg, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+        }
         Spacer(Modifier.height(8.dp))
-        Text("Status: $state   •   ${com.sbitx.remote.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall)
+        Text("Status: $state   •   ${com.sbitx.remote.BuildConfig.VERSION_NAME}",
+            style = MaterialTheme.typography.bodySmall)
     }
 }
 
+private val VOICE_MODES = setOf("USB", "LSB", "AM", "2TONE")
+private val CW_MODES = setOf("CW", "CWR")
+
 @Composable
-fun RadioPanel(client: SbitxClient, service: RadioService) {
+fun RadioPanel(client: SbitxClient, service: RadioService, state: ConnState) {
     val fields by client.fields.collectAsState()
+    val onAir by client.onAir.collectAsState()
+    val lastError by client.lastError.collectAsState()
+    val micGain by service.phoneMicGain.collectAsState()
+    val micError by service.micError.collectAsState()
 
-    val freq = fields["FREQ"]?.toLongOrNull() ?: 0L
+    val radioFreq = fields["FREQ"]?.toLongOrNull() ?: 0L
     val mode = fields["MODE"] ?: "?"
-    val mic = fields["MIC"]?.toIntOrNull() ?: 25
-    val vol = fields["AUDIO"]?.toIntOrNull() ?: 50
-    val drive = fields["DRIVE"]?.toIntOrNull() ?: 40
-    val bw = fields["BW"]?.toIntOrNull() ?: 2400
-    val smeter = fields["SMETER"] ?: "0 0"
-    var txActive by remember { mutableStateOf(false) }
-    val freqNow = rememberUpdatedState(freq)
+    val pitch = fields["PITCH"]?.toIntOrNull() ?: 600
+    var pttHeld by remember { mutableStateOf(false) }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+    // ---- Local tuning target: the knob/waterfall move this immediately and a
+    // 40 ms sender forwards only the latest value. zBitx queues remote commands
+    // in a 1000-byte buffer and DISCARDS the whole queue on overflow, so an
+    // unthrottled drag could silently lose tuning steps.
+    var target by remember { mutableLongStateOf(0L) }
+    var lastLocal by remember { mutableLongStateOf(0L) }
+    var pendingFreq by remember { mutableLongStateOf(0L) }
+    val recentlyTuned = System.currentTimeMillis() - lastLocal < 700
+    LaunchedEffect(radioFreq) { if (System.currentTimeMillis() - lastLocal > 700) target = radioFreq }
+    LaunchedEffect(client) {
+        var sent = 0L
+        while (true) {
+            val p = pendingFreq
+            if (p > 0 && p != sent) { client.setFrequency(p); sent = p }
+            delay(40)
+        }
+    }
+    val shownFreq = if (recentlyTuned && target > 0) target else radioFreq
+    fun tuneTo(f: Long) {
+        val v = f.coerceIn(100_000L, 30_000_000L)
+        target = v; lastLocal = System.currentTimeMillis(); pendingFreq = v
+    }
+    fun tuneBy(d: Long) = tuneTo((if (target > 0) target else radioFreq) + d)
 
-        // ================= FIXED HEADER: freq readout + tuning knob =================
+    Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 8.dp)) {
+
+        // ================= HEADER =================
         var selectedMult by remember { mutableStateOf(100L) }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("sBitx Remote", style = MaterialTheme.typography.titleMedium,
+            Text("zBitx Remote", style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f))
+            Text(fields["STATUS"]?.substringAfter(' ') ?: "", fontSize = 11.sp,
+                color = Color(0x99FFFFFF), modifier = Modifier.padding(end = 8.dp))
             OutlinedButton(
                 onClick = { service.disconnect() },
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF5350)),
+                border = BorderStroke(1.dp, Color(0xFFEF5350)),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF5350)),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                 modifier = Modifier.height(34.dp)
             ) { Text("Disconnect", fontSize = 12.sp) }
         }
-        Column(Modifier.fillMaxWidth()) {
-            FreqDigits(freq, selectedMult) { selectedMult = it }
-            Text("$mode   S: $smeter   step: ${stepName(selectedMult)}",
-                style = MaterialTheme.typography.bodySmall)
+        if (state == ConnState.RECONNECTING) {
+            Text(
+                lastError ?: "Reconnecting…",
+                fontSize = 12.sp, color = Color.Black,
+                modifier = Modifier.fillMaxWidth()
+                    .background(Color(0xFFFFB74D), RoundedCornerShape(6.dp))
+                    .padding(6.dp)
+            )
         }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            FreqDigits(shownFreq, selectedMult) { selectedMult = it }
+            Spacer(Modifier.weight(1f))
+            val vfo = fields["VFO"] ?: "A"
+            SmallChip("VFO $vfo", selected = vfo == "B") { client.setVfo(if (vfo == "A") "B" else "A") }
+        }
+        MeterRow(fields, onAir, mode, stepName(selectedMult))
         Spacer(Modifier.height(4.dp))
 
         // ================= SCROLLABLE CONTROLS =================
-        Column(
-            Modifier.weight(1f).verticalScroll(rememberScrollState())
-        ) {
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             // ---- Frequency entry ----
             var freqText by remember { mutableStateOf("") }
             Row(
@@ -248,188 +295,250 @@ fun RadioPanel(client: SbitxClient, service: RadioService) {
                     freqText, { freqText = it },
                     label = { Text("kHz", fontSize = 10.sp) },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
                     modifier = Modifier.weight(1f).height(52.dp)
                 )
                 TuneBtn("Go") {
-                    freqText.toDoubleOrNull()?.let { client.setFrequency((it * 1000).toLong()) }
+                    freqText.toDoubleOrNull()?.let { tuneTo((it * 1000).toLong()); freqText = "" }
                 }
             }
             Spacer(Modifier.height(4.dp))
 
-            // ---- Band + Mode in one line ----
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                BandDropdown(Modifier.weight(1f)) { client.setBand(it) }
+                BandDropdown(Modifier.weight(1f), shownFreq) { client.setBand(it) }
                 ModeDropdown(Modifier.weight(1f), mode) { client.setMode(it) }
             }
             Spacer(Modifier.height(4.dp))
 
-            // ---- Waterfall (hidden in FT8/digital - the console needs the space) ----
-            if (mode !in listOf("FT8", "FT4", "DIGI", "DIGITAL")) {
-                Waterfall(client, Modifier.fillMaxWidth().height(120.dp))
-                Spacer(Modifier.height(4.dp))
+            // ---- Waterfall: tap to tune, drag to pan ----
+            Waterfall(
+                client = client,
+                mode = mode,
+                low = fields["LOW"]?.toIntOrNull() ?: 300,
+                high = fields["HIGH"]?.toIntOrNull() ?: 3000,
+                txPitch = fields["TX_PITCH"]?.toIntOrNull(),
+                modifier = Modifier.fillMaxWidth().height(if (mode == "FT8") 90.dp else 120.dp),
+                onTap = { off ->
+                    when (mode) {
+                        "CW" -> tuneBy((off - pitch).toLong())
+                        "CWR" -> tuneBy((off + pitch).toLong())
+                        "FT8" -> if (off in 100..3000) client.setTxPitch((off / 10) * 10)
+                                 else tuneBy(off.toLong())
+                        else -> tuneTo(((shownFreq + off) / 10) * 10)
+                    }
+                },
+                onDrag = { hz -> tuneBy(hz) }
+            )
+            Row(
+                Modifier.fillMaxWidth().padding(top = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Span", fontSize = 11.sp)
+                val span = fields["SPAN"] ?: ""
+                listOf("25K", "10K", "6K", "2.5K").forEach { s ->
+                    SmallChip(s, selected = span == s) { client.setSpan(s) }
+                }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (mode == "FT8") "tap = TX tone" else "tap = tune",
+                    fontSize = 10.sp, color = Color(0x88FFFFFF)
+                )
             }
+            Spacer(Modifier.height(4.dp))
 
-            // ---- FT8 console (visible in FT8 mode) ----
-            if (mode == "FT8" || mode == "FT4") {
+            // ---- Mode-specific consoles ----
+            if (mode == "FT8") {
                 Ft8Console(client)
                 Spacer(Modifier.height(6.dp))
             }
+            if (mode in CW_MODES) {
+                CwConsole(client)
+                Spacer(Modifier.height(6.dp))
+            }
 
-            // ---- Sliders (paired to fit one screen) ----
-            val ifGain = fields["IF"]?.toIntOrNull() ?: 60
+            // ---- Levels ----
             Row(Modifier.fillMaxWidth()) {
-                LabeledSlider("sBitx volume", vol, 0..100, modifier = Modifier.weight(1f)) {
-                    client.setVolume(it)
-                }
+                LabeledSlider("Volume", fields["AUDIO"]?.toIntOrNull() ?: 60, 0..100,
+                    modifier = Modifier.weight(1f)) { client.setVolume(it) }
                 Spacer(Modifier.width(12.dp))
-                LabeledSlider("TX drive", drive, 1..100, modifier = Modifier.weight(1f)) {
-                    client.setDrive(it)
-                }
+                LabeledSlider("IF gain", fields["IF"]?.toIntOrNull() ?: 60, 0..100,
+                    modifier = Modifier.weight(1f)) { client.setIfGain(it) }
             }
             Row(Modifier.fillMaxWidth()) {
-                LabeledSlider("Bandwidth", bw, 300..5000, step = 100,
+                LabeledSlider("TX drive", fields["DRIVE"]?.toIntOrNull() ?: 40, 0..100, step = 5,
+                    modifier = Modifier.weight(1f)) { client.setDrive(it) }
+                Spacer(Modifier.width(12.dp))
+                LabeledSlider("Bandwidth", fields["BW"]?.toIntOrNull()
+                        ?: ((fields["HIGH"]?.toIntOrNull() ?: 3000) - (fields["LOW"]?.toIntOrNull() ?: 300)),
+                    50..5000, step = 50, display = { "$it Hz" },
                     modifier = Modifier.weight(1f)) { client.setBandwidth(it) }
-                Spacer(Modifier.width(12.dp))
-                LabeledSlider("IF", ifGain, 0..100, modifier = Modifier.weight(1f)) {
-                    client.setIfGain(it)
+            }
+            if (mode in VOICE_MODES) {
+                Row(Modifier.fillMaxWidth()) {
+                    FloatSlider(
+                        "Phone mic", micGain, 0.25f..6f,
+                        display = { "%.1fx".format(it) },
+                        modifier = Modifier.weight(1f)
+                    ) { service.setPhoneMicGain(it) }
+                    Spacer(Modifier.width(12.dp))
+                    LabeledSlider("Compressor", fields["COMP"]?.toIntOrNull() ?: 0, 0..10,
+                        display = { if (it == 0) "off" else "$it" },
+                        modifier = Modifier.weight(1f)) { client.setComp(it) }
                 }
             }
-            // ---- AINR: only on capable firmware, voice modes only ----
-            val ainr = fields["AINR"]
-            val digital = mode in listOf("FT8", "FT4", "DIGI", "DIGITAL", "2TONE")
-            if (ainr != null && !digital) {
-                val ainrs = fields["AINRS"]?.toIntOrNull() ?: 80
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("AINR", fontSize = 11.sp)
-                    Spacer(Modifier.width(8.dp))
-                    Switch(
-                        checked = ainr == "ON",
-                        onCheckedChange = { client.setAinr(it) },
-                        modifier = Modifier.height(26.dp)
-                    )
+            if (mode in CW_MODES) {
+                Row(Modifier.fillMaxWidth()) {
+                    LabeledSlider("WPM", fields["WPM"]?.toIntOrNull() ?: 12, 5..40,
+                        modifier = Modifier.weight(1f)) { client.setWpm(it) }
                     Spacer(Modifier.width(12.dp))
-                    if (ainr == "ON") {
-                        val ainrv = fields["AINRV"]?.toIntOrNull() ?: 25
-                        LabeledSlider("Strength", ainrs, 0..100, step = 5,
-                            modifier = Modifier.weight(1f)) { client.setAinrStrength(it) }
-                        Spacer(Modifier.width(10.dp))
-                        LabeledSlider("Relax", ainrv, 0..50, step = 5,
-                            modifier = Modifier.weight(1f)) { client.setAinrRelax(it) }
-                    } else {
-                        Spacer(Modifier.weight(1f))
-                    }
+                    LabeledSlider("Pitch", pitch, 300..1200, step = 10, display = { "$it Hz" },
+                        modifier = Modifier.weight(1f)) { client.setPitch(it) }
                 }
             }
 
+            // ---- Receiver DSP + misc toggles (zBitx plugins) ----
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                listOf("ANR", "DSP", "NOTCH").forEach { lbl ->
+                    val on = fields[lbl] == "ON"
+                    SmallChip(lbl, selected = on) { client.setToggle(lbl, !on) }
+                }
+                val agc = fields["AGC"] ?: "SLOW"
+                SmallChip("AGC $agc", selected = agc != "OFF") {
+                    val opts = listOf("OFF", "SLOW", "MED", "FAST")
+                    client.setAgc(opts[(opts.indexOf(agc) + 1).mod(opts.size)])
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val split = fields["SPLIT"] == "ON"
+                SmallChip("SPLIT", selected = split) { client.setSplit(!split) }
+                val lock = fields["VFOLK"] == "ON"
+                SmallChip("LOCK", selected = lock) { client.setToggle("VFOLK", !lock) }
+                val tuning = fields["TUNE"] == "ON"
+                SmallChip(if (tuning) "TUNING…" else "TUNE ${fields["TNPWR"] ?: ""}".trim(),
+                    selected = tuning, warn = true) { client.tune(!tuning) }
+            }
             Spacer(Modifier.height(4.dp))
         }
 
-        // ================= FIXED: knob above PTT =================
+        // ================= FIXED: knob + PTT =================
         Box(Modifier.fillMaxWidth().padding(top = 4.dp), contentAlignment = Alignment.Center) {
             Box(contentAlignment = Alignment.Center) {
                 TuningKnob(
-                    modifier = Modifier.size(132.dp),
-                    onDelta = { steps ->
-                        val f = (freqNow.value + steps * selectedMult).coerceIn(500_000L, 30_000_000L)
-                        client.setFrequency(f)
-                    }
+                    modifier = Modifier.size(if (mode in VOICE_MODES) 120.dp else 140.dp),
+                    onDelta = { steps -> if (fields["VFOLK"] != "ON") tuneBy(steps * selectedMult) }
                 )
                 Text("↺ ↻", fontSize = 14.sp, color = Color(0x66FFFFFF))
             }
         }
-        // ================= FIXED PTT (hidden in FT8 - TX is slot-based) =================
-        if (mode != "FT8" && mode != "FT4") Box(
-            Modifier
-                .fillMaxWidth()
-                .height(84.dp)
-                .padding(top = 4.dp)
-                .background(
-                    if (txActive) Color(0xFFB71C1C) else Color(0xFF1B5E20),
-                    RoundedCornerShape(16.dp)
-                )
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onPress = {
-                            txActive = true
-                            service.pttDown()
-                            tryAwaitRelease()
-                            txActive = false
-                            service.pttUp()
-                        }
+        // PTT only for phone modes; CW and FT8 are keyed by the radio from the text buffer.
+        if (mode in VOICE_MODES) {
+            val bg = when {
+                onAir -> Color(0xFFB71C1C)
+                pttHeld -> Color(0xFFE65100)       // pressed, radio not confirmed yet
+                else -> Color(0xFF1B5E20)
+            }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(80.dp)
+                    .padding(top = 4.dp)
+                    .background(bg, RoundedCornerShape(16.dp))
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onPress = {
+                                pttHeld = true
+                                service.pttDown()
+                                tryAwaitRelease()
+                                pttHeld = false
+                                service.pttUp()
+                            }
+                        )
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        when {
+                            onAir && pttHeld -> "ON AIR - release to RX"
+                            onAir -> "ON AIR"
+                            pttHeld -> "Keying…"
+                            else -> "HOLD TO TALK (PTT)"
+                        },
+                        color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold
                     )
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                if (txActive) "ON AIR — release to RX" else "HOLD TO TALK (PTT)",
-                color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold
-            )
-        }
-    }
-}
-
-/** Rotary tuning knob: drag around the center; each 12 degrees = one 100 Hz step. */
-@Composable
-fun TuningKnob(modifier: Modifier = Modifier, onDelta: (Int) -> Unit) {
-    var angle by remember { mutableFloatStateOf(0f) }
-    var accum by remember { mutableFloatStateOf(0f) }
-    val knobColor = MaterialTheme.colorScheme.surfaceVariant
-    val rimColor = MaterialTheme.colorScheme.primary
-    val dotColor = MaterialTheme.colorScheme.onSurface
-
-    androidx.compose.foundation.Canvas(
-        modifier = modifier.pointerInput(Unit) {
-            detectDragGestures { change, _ ->
-                val c = Offset(size.width / 2f, size.height / 2f)
-                val p0 = change.previousPosition - c
-                val p1 = change.position - c
-                var d = Math.toDegrees(
-                    (atan2(p1.y, p1.x) - atan2(p0.y, p0.x)).toDouble()
-                ).toFloat()
-                if (d > 180f) d -= 360f
-                if (d < -180f) d += 360f
-                angle += d
-                accum += d
-                val stepDeg = 12f
-                while (accum >= stepDeg) { onDelta(+1); accum -= stepDeg }
-                while (accum <= -stepDeg) { onDelta(-1); accum += stepDeg }
-                change.consume()
+                    if (pttHeld) MicLevel(service)
+                    if (micError) Text("Phone mic unavailable - check the microphone permission",
+                        color = Color.White, fontSize = 11.sp)
+                }
             }
         }
-    ) {
-        val r = size.minDimension / 2f
-        val c = Offset(size.width / 2f, size.height / 2f)
-        drawCircle(color = knobColor, radius = r, center = c)
-        drawCircle(color = rimColor, radius = r, center = c,
-            style = androidx.compose.ui.graphics.drawscope.Stroke(width = r * 0.08f))
-        // knurl ticks
-        for (i in 0 until 12) {
-            val a = Math.toRadians((angle + i * 30f).toDouble())
-            val inner = c + Offset(cos(a).toFloat(), sin(a).toFloat()) * (r * 0.72f)
-            val outer = c + Offset(cos(a).toFloat(), sin(a).toFloat()) * (r * 0.88f)
-            drawLine(rimColor.copy(alpha = 0.5f), inner, outer, strokeWidth = r * 0.04f)
-        }
-        // position dot
-        val a = Math.toRadians(angle.toDouble() - 90.0)
-        val dot = c + Offset(cos(a).toFloat(), sin(a).toFloat()) * (r * 0.55f)
-        drawCircle(color = dotColor, radius = r * 0.10f, center = dot)
     }
 }
 
-/** Band selector as a dropdown menu. */
+/** S-meter normally; forward power and SWR while the radio is transmitting. */
 @Composable
-fun BandDropdown(modifier: Modifier = Modifier, onSelect: (String) -> Unit) {
+fun MeterRow(fields: Map<String, String>, onAir: Boolean, mode: String, step: String) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(mode, fontWeight = FontWeight.Bold, fontSize = 13.sp,
+            modifier = Modifier.padding(end = 8.dp))
+        if (onAir) {
+            val pwr = (fields["POWER"]?.toIntOrNull() ?: 0) / 10f
+            val swr = (fields["REF"]?.toIntOrNull() ?: 10).coerceAtLeast(10) / 10f
+            BarMeter((pwr / 5f).coerceIn(0f, 1f), Color(0xFFEF5350), Modifier.weight(1f))
+            Text("  %.1f W  SWR %.1f".format(pwr, swr), fontSize = 12.sp,
+                color = if (swr >= 3f) Color(0xFFFF5252) else Color.Unspecified)
+        } else {
+            val parts = (fields["SMETER"] ?: "0 0").split(' ')
+            val s = parts.getOrNull(0)?.toIntOrNull() ?: 0
+            val db = parts.getOrNull(1)?.toIntOrNull() ?: 0
+            val frac = if (s < 9) s / 9f * 0.6f else 0.6f + db.coerceIn(0, 20) / 20f * 0.4f
+            BarMeter(frac, if (s >= 9) Color(0xFFFFB74D) else Color(0xFF66BB6A), Modifier.weight(1f))
+            Text(if (s >= 9 && db > 0) "  S9+$db" else "  S$s", fontSize = 12.sp,
+                modifier = Modifier.width(56.dp))
+        }
+        Text("  step $step", fontSize = 11.sp, color = Color(0x99FFFFFF))
+    }
+}
+
+@Composable
+fun MicLevel(service: RadioService) {
+    var peak by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(Unit) { while (true) { peak = service.micPeak(); delay(60) } }
+    BarMeter(peak, if (peak > 0.8f) Color(0xFFFFEB3B) else Color.White,
+        Modifier.width(160.dp).padding(top = 4.dp))
+}
+
+private val BANDS = listOf(
+    "80M" to (3_500_000L..4_000_000L), "60M" to (5_250_000L..5_450_000L),
+    "40M" to (7_000_000L..7_300_000L), "30M" to (10_100_000L..10_150_000L),
+    "20M" to (14_000_000L..14_350_000L), "17M" to (18_068_000L..18_168_000L),
+    "15M" to (21_000_000L..21_450_000L), "12M" to (24_890_000L..24_990_000L),
+    "10M" to (28_000_000L..29_700_000L),
+)
+
+/** Band selector (zBitx band buttons recall the band stack for that band). */
+@Composable
+fun BandDropdown(modifier: Modifier = Modifier, freq: Long, onSelect: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    var selected by remember { mutableStateOf("Band") }
+    val current = BANDS.firstOrNull { freq in it.second }?.first ?: "--"
     Box(modifier) {
         OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-            Text("Band: $selected  ▾")
+            Text("Band: $current  ▾")
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            listOf("80M", "40M", "30M", "20M", "17M", "15M", "12M", "10M").forEach { b ->
+            BANDS.forEach { (b, _) ->
                 DropdownMenuItem(text = { Text(b) }, onClick = {
-                    selected = b; expanded = false; onSelect(b)
+                    expanded = false; onSelect(b)
                 })
             }
         }
@@ -437,256 +546,76 @@ fun BandDropdown(modifier: Modifier = Modifier, onSelect: (String) -> Unit) {
 }
 
 @Composable
+fun ModeDropdown(modifier: Modifier = Modifier, current: String, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier) {
+        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text("Mode: $current  ▾")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            // r1:mode selection list in zBitx sbitx_gtk.c
+            listOf("USB", "LSB", "AM", "CW", "CWR", "FT8", "DIGI").forEach { m ->
+                DropdownMenuItem(text = { Text(m) }, onClick = {
+                    expanded = false; onSelect(m)
+                })
+            }
+        }
+    }
+}
+
+@Composable
+fun SmallChip(label: String, selected: Boolean, warn: Boolean = false, onClick: () -> Unit) {
+    val on = if (warn) Color(0xFFE65100) else MaterialTheme.colorScheme.primary
+    OutlinedButton(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+        border = BorderStroke(1.dp, if (selected) on else Color(0x55FFFFFF)),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) on.copy(alpha = 0.25f) else Color.Transparent,
+            contentColor = if (selected) Color.White else Color(0xCCFFFFFF)
+        ),
+        modifier = Modifier.height(30.dp)
+    ) { Text(label, fontSize = 11.sp, maxLines = 1) }
+}
+
+@Composable
 fun LabeledSlider(
     label: String, value: Int, range: IntRange, step: Int = 1,
+    display: (Int) -> String = { it.toString() },
     modifier: Modifier = Modifier, onSet: (Int) -> Unit
 ) {
-    var local by remember(value) { mutableFloatStateOf(value.toFloat()) }
+    var dragging by remember { mutableStateOf(false) }
+    var local by remember { mutableFloatStateOf(value.toFloat()) }
+    // follow the radio unless the user is mid-drag
+    LaunchedEffect(value) { if (!dragging) local = value.toFloat() }
     Column(modifier) {
-        Text("$label: ${local.toInt()}", fontSize = 11.sp)
+        Text("$label: ${display(((local.roundToInt()) / step) * step)}", fontSize = 11.sp)
         Slider(
-            value = local,
-            onValueChange = { local = it },
-            onValueChangeFinished = { onSet((local.toInt() / step) * step) },
+            value = local.coerceIn(range.first.toFloat(), range.last.toFloat()),
+            onValueChange = { dragging = true; local = it },
+            onValueChangeFinished = {
+                dragging = false
+                onSet((local.roundToInt() / step) * step)
+            },
             valueRange = range.first.toFloat()..range.last.toFloat(),
             modifier = Modifier.height(26.dp)
         )
     }
 }
 
-/** Tap-to-select frequency digits; the knob then tunes the selected digit's place. */
 @Composable
-fun FreqDigits(freq: Long, selectedMult: Long, onSelect: (Long) -> Unit) {
-    val f = freq.coerceIn(0L, 99_999_999L)
-    val digits = "%08d".format(f)
-    val mults = listOf(
-        10_000_000L, 1_000_000L, 100_000L, 10_000L, 1_000L, 100L, 10L, 1L
-    )
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        digits.forEachIndexed { i, ch ->
-            if (i == 2 || i == 5) {
-                Text(".", fontSize = 30.sp, fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold)
-            }
-            val sel = mults[i] == selectedMult
-            Text(
-                ch.toString(),
-                fontSize = 30.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                color = if (sel) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurface,
-                textDecoration = if (sel) TextDecoration.Underline else null,
-                modifier = Modifier
-                    .clickable { onSelect(mults[i]) }
-                    .padding(horizontal = 1.dp)
-            )
-        }
-    }
-}
-
-fun stepName(mult: Long): String = when (mult) {
-    10_000_000L -> "10 MHz"; 1_000_000L -> "1 MHz"
-    100_000L -> "100 kHz"; 10_000L -> "10 kHz"; 1_000L -> "1 kHz"
-    100L -> "100 Hz"; 10L -> "10 Hz"; else -> "1 Hz"
-}
-
-/**
- * FT8 operating panel. Decodes stream from the radio as styled fragments
- * sharing a row id; we stitch fragments into single lines and render the
- * firmware's #X span styles with the same meaning as the sBitx screen:
- * time/freq, SNR, caller, grid, country, my-call highlight.
- */
-@Composable
-fun Ft8Console(client: SbitxClient) {
-    val fields by client.fields.collectAsState()
-    val myCall = (fields["MYCALLSIGN"] ?: "").uppercase()
-    val myGrid = (fields["MYGRID"] ?: "").uppercase().take(4)
-
-    // ordered rows: rowId -> accumulated decorated text
-    val rowOrder = remember { mutableStateListOf<Int>() }
-    val rowText = remember { mutableStateMapOf<Int, String>() }
-    val rowKind = remember { mutableStateMapOf<Int, String>() }
-    var synth = remember { -1 }
-    val listState = rememberLazyListState()
-    var msg by remember { mutableStateOf("") }
-    var dxCall by remember { mutableStateOf("") }
-    var dxSnr by remember { mutableStateOf("") }
-    var cqMod by remember { mutableStateOf("") }
-
-    LaunchedEffect(client) {
-        client.console.collect { cl ->
-            if (!cl.kind.startsWith("WSJTX")) return@collect
-            val id = if (cl.line >= 0) cl.line else synth--
-            if (rowText.containsKey(id)) {
-                rowText[id] = rowText[id] + cl.text
-            } else {
-                rowText[id] = cl.text
-                rowKind[id] = cl.kind
-                rowOrder.add(id)
-                if (rowOrder.size > 200) {
-                    val old = rowOrder.removeAt(0)
-                    rowText.remove(old); rowKind.remove(old)
-                }
-            }
-            if (rowOrder.isNotEmpty()) listState.animateScrollToItem(rowOrder.size - 1)
-        }
-    }
-
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(Color(0xFF10141A), RoundedCornerShape(8.dp))
-            .padding(6.dp)
-    ) {
-        Text(
-            if (myCall.isBlank()) "FT8  (set MYCALLSIGN on the radio!)"
-            else "FT8  $myCall $myGrid" + (if (dxCall.isNotBlank()) "  →  $dxCall" else ""),
-            fontSize = 12.sp, color = Color(0xFF81C784)
+fun FloatSlider(
+    label: String, value: Float, range: ClosedFloatingPointRange<Float>,
+    display: (Float) -> String, modifier: Modifier = Modifier, onSet: (Float) -> Unit
+) {
+    var local by remember(value) { mutableFloatStateOf(value) }
+    Column(modifier) {
+        Text("$label: ${display(local)}", fontSize = 11.sp)
+        Slider(
+            value = local, onValueChange = { local = it },
+            onValueChangeFinished = { onSet(local) },
+            valueRange = range, modifier = Modifier.height(26.dp)
         )
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxWidth().height(170.dp)
-        ) {
-            items(rowOrder.size) { i ->
-                val id = rowOrder[i]
-                val text = rowText[id] ?: return@items
-                val kind = rowKind[id] ?: "WSJTX-RX"
-                Text(
-                    renderDecorated(text, kind),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            val sp = decoSpans(text)
-                            sp.firstOrNull { it.first == 'R' }?.let { dxCall = it.second.trim() }
-                                ?: run {
-                                    val plain = sp.joinToString("") { it.second }
-                                    plain.split(" ").lastOrNull {
-                                        it.any(Char::isDigit) && it.any(Char::isLetter) && it.length in 3..10
-                                    }?.let { dxCall = it }
-                                }
-                            sp.firstOrNull { it.first == 'H' }?.let { dxSnr = it.second.trim() }
-                        }
-                        .padding(vertical = 1.dp)
-                )
-            }
-        }
-
-        // ---- Standard message templates ----
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                cqMod, { cqMod = it.uppercase().trim() },
-                label = { Text("CQ mod", fontSize = 10.sp) },
-                singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp),
-                modifier = Modifier.width(86.dp)
-            )
-            Ft8Btn("CQ", myCall.isNotBlank()) {
-                msg = listOf("CQ", cqMod, myCall, myGrid)
-                    .filter { it.isNotBlank() }.joinToString(" ")
-            }
-            Ft8Btn("Call", dxCall.isNotBlank() && myCall.isNotBlank()) {
-                msg = "$dxCall $myCall $myGrid".trim()
-            }
-            Ft8Btn("Rprt", dxCall.isNotBlank() && myCall.isNotBlank()) {
-                msg = "$dxCall $myCall ${dxSnr.ifBlank { "-10" }}"
-            }
-            Ft8Btn("RR73", dxCall.isNotBlank() && myCall.isNotBlank()) {
-                msg = "$dxCall $myCall RR73"
-            }
-            Ft8Btn("73", dxCall.isNotBlank() && myCall.isNotBlank()) {
-                msg = "$dxCall $myCall 73"
-            }
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                msg, { msg = it.uppercase() },
-                label = { Text("FT8 message", fontSize = 11.sp) },
-                singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    fontFamily = FontFamily.Monospace, fontSize = 13.sp
-                ),
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(6.dp))
-            Button(
-                onClick = { if (msg.isNotBlank()) client.ft8Transmit(msg) },
-                enabled = msg.isNotBlank()
-            ) { Text("Send") }
-        }
-    }
-}
-
-@Composable
-fun Ft8Btn(label: String, enabled: Boolean, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick = onClick, enabled = enabled,
-        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-        modifier = Modifier.height(40.dp)
-    ) { Text(label, fontSize = 12.sp) }
-}
-
-/** Split "#G142645 16 #H-15 ..." into (styleChar, text) spans. Default style 'F'. */
-fun decoSpans(text: String): List<Pair<Char, String>> {
-    val out = mutableListOf<Pair<Char, String>>()
-    var style = 'F'
-    val sb = StringBuilder()
-    var i = 0
-    while (i < text.length) {
-        val c = text[i]
-        if (c == '#' && i + 1 < text.length && text[i + 1] in 'A'..'Z') {
-            if (sb.isNotEmpty()) { out.add(style to sb.toString()); sb.clear() }
-            style = text[i + 1]; i += 2
-        } else { sb.append(c); i++ }
-    }
-    if (sb.isNotEmpty()) out.add(style to sb.toString())
-    return out
-}
-
-/**
- * Render firmware span styles (see hist_disp.c ff_char):
- * G=time/freq/FT8-RX, H=SNR/FT8-TX, Q=my call, R=caller, S=grid,
- * W=already-worked grid, P=country/reply, O=queued, U/V=distance/azimuth.
- */
-fun renderDecorated(text: String, kind: String):
-        androidx.compose.ui.text.AnnotatedString {
-    // Exact colors from the firmware's font_table (sbitx_gtk.c)
-    fun colorOf(s: Char): Color = when (s) {
-        'G' -> Color(0xFF00CCCC)          // time / freq / FT8 RX (0,0.8,0.8)
-        'H' -> Color(0xFFFFFFFF)          // SNR (1,1,1)
-        'Q' -> Color(0xFFFF3333)          // my callsign (1,0,0)
-        'R' -> Color(0xFFE07818)          // caller (0.8,0.4,0)
-        'S' -> Color(0xFFFFCC00)          // grid, new (1,0.8,0)
-        'W' -> Color(0xFF00B300)          // grid, already worked (0,0.6,0)
-        'P' -> Color(0xFF00E000)          // country / FT8 reply (0,1,0)
-        'O' -> Color(0xFFFFB74D)          // queued
-        'U', 'V' -> Color(0xFFFFCC00)     // distance / azimuth (1,0.8,0)
-        else -> Color(0xFFB3B3B3)         // log/default (0.7,0.7,0.7)
-    }
-    return androidx.compose.ui.text.buildAnnotatedString {
-        val kindTint = when (kind) {
-            "WSJTX-TX" -> Color(0xFFEF5350)
-            "WSJTX-Q" -> Color(0xFFFFB74D)
-            else -> null
-        }
-        for ((s, t) in decoSpans(text)) {
-            val bold = s == 'Q'
-            pushStyle(androidx.compose.ui.text.SpanStyle(
-                color = kindTint ?: colorOf(s),
-                fontWeight = if (bold) FontWeight.Bold else null
-            ))
-            append(t)
-            pop()
-        }
     }
 }
 
@@ -699,101 +628,8 @@ fun TuneBtn(label: String, onClick: () -> Unit) {
     ) { Text(label, fontSize = 12.sp) }
 }
 
-@Composable
-fun ModeDropdown(modifier: Modifier = Modifier, current: String, onSelect: (String) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    Box(modifier) {
-        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-            Text("Mode: $current  ▾")
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            listOf("LSB", "USB", "CW", "CWR", "AM", "FT8").forEach { m ->
-                DropdownMenuItem(text = { Text(m) }, onClick = {
-                    expanded = false; onSelect(m)
-                })
-            }
-        }
-    }
-}
-
-/**
- * Scrolling waterfall rendered from the firmware's spectrum frames:
- * "RX " + one ASCII char per ~47 Hz bin, magnitude = char - 32 (0..95).
- * Center of the display = the tuned frequency.
- */
-@Composable
-fun Waterfall(client: SbitxClient, modifier: Modifier = Modifier) {
-    val rowsN = 80
-    var bins by remember { mutableStateOf(0) }
-    var bmp by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    val pixels = remember { java.util.concurrent.atomic.AtomicReference(IntArray(0)) }
-    var tick by remember { mutableStateOf(0) }
-
-    LaunchedEffect(client) {
-        client.spectrum.collect { line ->
-            if (!line.startsWith("RX ")) return@collect   // skip TX envelope frames
-            val data = line.substring(3)
-            val n = data.length
-            if (n < 16) return@collect
-            var px = pixels.get()
-            if (n != bins) {
-                bins = n
-                px = IntArray(n * rowsN)
-                pixels.set(px)
-                bmp = android.graphics.Bitmap.createBitmap(
-                    n, rowsN, android.graphics.Bitmap.Config.ARGB_8888)
-            }
-            System.arraycopy(px, n, px, 0, n * (rowsN - 1))
-            val base = n * (rowsN - 1)
-            for (x in 0 until n) {
-                val v = (data[x].code - 32).coerceIn(0, 95)
-                px[base + x] = heatColor(v)
-            }
-            bmp?.setPixels(px, 0, n, 0, 0, n, rowsN)
-            tick++
-        }
-    }
-
-    Box(modifier.background(Color(0xFF0A0E14))) {
-        val b = bmp
-        if (b != null && tick > 0) {
-            androidx.compose.foundation.Image(
-                bitmap = b.asImageBitmap(),
-                contentDescription = "waterfall",
-                contentScale = androidx.compose.ui.layout.ContentScale.FillBounds,
-                filterQuality = androidx.compose.ui.graphics.FilterQuality.None,
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-        // center-frequency marker
-        androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
-            drawLine(
-                Color(0x88FF5252),
-                start = Offset(size.width / 2f, 0f),
-                end = Offset(size.width / 2f, size.height),
-                strokeWidth = 2f
-            )
-        }
-    }
-}
-
-/** 0..95 -> black -> blue -> cyan -> yellow -> white heat map. */
-fun heatColor(v: Int): Int {
-    val t = v / 95f
-    val r: Int; val g: Int; val b: Int
-    when {
-        t < 0.25f -> { val k = t / 0.25f; r = 0; g = 0; b = (k * 180).toInt() }
-        t < 0.5f  -> { val k = (t - 0.25f) / 0.25f; r = 0; g = (k * 200).toInt(); b = 180 + (k * 75).toInt() }
-        t < 0.75f -> { val k = (t - 0.5f) / 0.25f; r = (k * 255).toInt(); g = 200 + (k * 55).toInt(); b = (255 * (1 - k)).toInt() }
-        else      -> { val k = (t - 0.75f) / 0.25f; r = 255; g = 255; b = (k * 255).toInt() }
-    }
-    return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-}
-
-fun formatFreq(hz: Long): String {
-    if (hz <= 0) return "-- . --- . ---"
-    val mhz = hz / 1_000_000
-    val khz = (hz / 1_000) % 1_000
-    val h = hz % 1_000
-    return "%d.%03d.%03d".format(mhz, khz, h)
+fun stepName(mult: Long): String = when (mult) {
+    10_000_000L -> "10 MHz"; 1_000_000L -> "1 MHz"
+    100_000L -> "100 kHz"; 10_000L -> "10 kHz"; 1_000L -> "1 kHz"
+    100L -> "100 Hz"; 10L -> "10 Hz"; else -> "1 Hz"
 }

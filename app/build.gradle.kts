@@ -9,7 +9,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.sbitx.remote"
+        applicationId = "com.zbitx.remote"
         minSdk = 26
         targetSdk = 34
         // CI injects these: -PverCode=N -PrelVersion="v1" or "Beta v1.5"
