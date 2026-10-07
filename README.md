@@ -1,4 +1,4 @@
-# 📻 zBitx Remote
+# 📻 zBitx Remote Fork By W9JES
 
 **A native Android app for operating a zBitx QRP transceiver from anywhere.**
 
@@ -77,9 +77,9 @@ Open in Android Studio (Hedgehog+) and run, or push a branch — GitHub Actions 
 
 ## 🙏 Acknowledgements
 
+- **Enhanced by W9JES and the Radio & Electronics Hub team** — the sBitx 64-bit fork and browser-mic SSB transmit that zBitx inherits.
 - **VU3UBP** — original sBitx Remote app this is built on.
 - **Ashhar Farhan, VU2ESE** — creator of the sBitx and its open-source software.
-- **W9JES and the drexjj team** — the sBitx 64-bit fork and browser-mic SSB transmit that zBitx inherits.
 
 ---
 
