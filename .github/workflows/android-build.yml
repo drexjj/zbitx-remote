@@ -2,96 +2,61 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ "**" ]
-  pull_request:
+    branches:
+      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   build:
+    name: Build APK
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
     steps:
-      - name: Checkout
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.7'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      # Versioning: first main release is v1, then v1.1, v1.2, ...
-      # (if a v2 tag is ever created manually, automation continues v2.1, v2.2)
-      # Beta builds: v<latest>.<run#>, e.g. Beta v1.1.57
-      - name: Compute versions
-        id: relver
+      - name: Make Gradle executable
+        run: chmod +x ./gradlew
+
+      - name: Build APK
+        run: ./gradlew assembleDebug
+
+      - name: Rename APK
         run: |
-          git fetch --tags --quiet
-          last=$(git tag -l 'v[0-9]*' | sed 's/^v//' | sort -V | tail -1)
-          if [ -z "$last" ]; then
-            next=v1
-          elif [[ "$last" != *.* ]]; then
-            next=v${last}.1
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME}"
           else
-            major=${last%.*}; minor=${last##*.}
-            next=v${major}.$(( minor + 1 ))
-          fi
-          echo "next=$next" >> "$GITHUB_OUTPUT"
-          echo "beta=v${last:-0}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-
-      - name: Build debug APK
-        run: |
-          if [ "${{ github.ref_name }}" = "main" ]; then
-            gradle assembleDebug --no-daemon -PverCode=${{ github.run_number }} -PrelVersion="${{ steps.relver.outputs.next }}"
-          else
-            gradle assembleDebug --no-daemon -PverCode=${{ github.run_number }} -PrelVersion="Beta ${{ steps.relver.outputs.beta }}"
+            VERSION="dev-${GITHUB_SHA::7}"
           fi
 
-      - name: Verify APK integrity
-        run: |
-          ls -la app/build/outputs/apk/debug/
-          file app/build/outputs/apk/debug/app-debug.apk
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | head -20
-          cp app/build/outputs/apk/debug/app-debug.apk sbitx-remote.apk
+          cp app/build/outputs/apk/debug/app-debug.apk \
+             "zBitx-Remote-${VERSION}.apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sbitx-remote-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 14
+          name: zBitx-Remote-APK
+          path: zBitx-Remote-*.apk
 
-      # Non-main branches: rolling pre-release for testers.
-      - name: Publish APK to latest-build pre-release
-        if: github.event_name == 'push' && github.ref_name != 'main'
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest-build
-          name: Latest test build
-          prerelease: true
-          files: sbitx-remote.apk
-          body: |
-            Beta ${{ steps.relver.outputs.beta }} from ${{ github.ref_name }} (${{ github.sha }}).
-            Download sbitx-remote.apk below and install directly.
-
-      # Pushes to main (e.g. merged PRs): proper versioned release.
-      - name: Publish versioned release (main)
-        if: github.event_name == 'push' && github.ref_name == 'main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.relver.outputs.next }}
-          name: sBitx Remote ${{ steps.relver.outputs.next }}
-          prerelease: false
-          files: sbitx-remote.apk
-          body: |
-            sBitx Remote ${{ steps.relver.outputs.next }} — built from main (${{ github.sha }}).
-            Download sbitx-remote.apk below and install on Android 8.0+.
-            Requires drexjj/sbitx firmware v5.0+ and Tailscale for internet use. 73 de VU3UBP
+          files: zBitx-Remote-*.apk
+          generate_release_notes: true
+          name: zBitx Remote ${{ github.ref_name }}
