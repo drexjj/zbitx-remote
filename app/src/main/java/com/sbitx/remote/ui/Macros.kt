@@ -169,14 +169,28 @@ private fun MacroKeyButton(
     }
 }
 
+/** How the logger row is set up for a mode. */
+enum class LoggerStyle(
+    val defaultRst: String?,      // filled into SENT when a call is entered (CW only)
+    val extraLabel: String,       // 4th field caption
+    val extraField: String,       // radio field it edits
+) {
+    /** CW/CWR: 599 default; 4th field is my exchange (NR), used by {EXCH} in macros. */
+    CW("599", "My exch", "NR"),
+    /** FT8: the radio fills CALL/SENT/RECV/EXCH itself; EXCH holds their grid. */
+    FT8(null, "Grid", "EXCH"),
+}
+
 /**
  * The radio's QSO logger, which the macros read from:
  *   CALL -> "!", SENT -> {SENTRST}/{SENTRSTCUT}, NR -> {EXCH} / "#".
- * Every edit is pushed to the radio straight away so the next macro uses it.
+ * Every edit is pushed to the radio straight away so the next macro uses it,
+ * and the fields follow the radio (FT8 fills them in as a QSO progresses).
  * Log saves the QSO on the radio (it needs Call, Sent and Rcvd).
  */
 @Composable
-fun LoggerRow(client: SbitxClient, defaultRst: String = "599") {
+fun LoggerRow(client: SbitxClient, style: LoggerStyle = LoggerStyle.CW, onOpenLog: (() -> Unit)? = null) {
+    val defaultRst = style.defaultRst
     val fields by client.fields.collectAsState()
     val call = fields["CALL"].orEmpty()
     val sent = fields["SENT"].orEmpty()
@@ -188,12 +202,14 @@ fun LoggerRow(client: SbitxClient, defaultRst: String = "599") {
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             LoggerField("Call", "CALL", call, client, Modifier.weight(1.5f)) { v ->
-                // macros like "ur rst {SENTRST}" need SENT; fill the usual report
-                if (v.isNotBlank() && sent.isBlank()) client.setLogField("SENT", defaultRst)
+                // CW macros like "ur rst {SENTRST}" need SENT; fill the usual report
+                if (defaultRst != null && v.isNotBlank() && sent.isBlank())
+                    client.setLogField("SENT", defaultRst)
             }
             LoggerField("Sent", "SENT", sent, client, Modifier.weight(1f), placeholder = defaultRst)
             LoggerField("Rcvd", "RECV", fields["RECV"].orEmpty(), client, Modifier.weight(1f))
-            LoggerField("My exch", "NR", fields["NR"].orEmpty(), client, Modifier.weight(1f))
+            LoggerField(style.extraLabel, style.extraField, fields[style.extraField].orEmpty(),
+                client, Modifier.weight(1f))
         }
         Row(
             Modifier.fillMaxWidth().padding(top = 4.dp),
@@ -208,10 +224,12 @@ fun LoggerRow(client: SbitxClient, defaultRst: String = "599") {
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
                 modifier = Modifier.height(34.dp)) { Text("Wipe", fontSize = 12.sp) }
             Spacer(Modifier.weight(1f))
-            Text(
-                if (canLog) "" else "Log needs Call, Sent, Rcvd",
-                fontSize = 10.sp, color = Color(0x88FFFFFF)
-            )
+            if (!canLog) Text("Needs Call, Sent, Rcvd", fontSize = 10.sp, color = Color(0x88FFFFFF))
+            if (onOpenLog != null) {
+                OutlinedButton(onClick = onOpenLog,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    modifier = Modifier.height(34.dp)) { Text("Logbook", fontSize = 12.sp) }
+            }
         }
     }
 }

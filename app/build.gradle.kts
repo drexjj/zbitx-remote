@@ -12,14 +12,34 @@ android {
         applicationId = "com.zbitx.remote"
         minSdk = 26
         targetSdk = 34
-        // CI injects these: -PverCode=N -PrelVersion="v1" or "Beta v1.5"
+        // CI injects these: -PverCode=<run number> -PrelVersion=<git describe>.
+        // versionCode must go up with every build or Android blocks the update.
         versionCode = (project.findProperty("verCode") as String?)?.toIntOrNull() ?: 1
         versionName = (project.findProperty("relVersion") as String?) ?: "dev"
     }
 
+    // One fixed signing key for every build, so a newer APK installs over the
+    // old one as an upgrade. (Previously each CI run signed with a throwaway
+    // debug key, and Android refuses to update an app whose signature changed.)
+    // The key in the repo can be overridden with private ones via environment
+    // variables (e.g. from GitHub secrets) - but switching keys again means one
+    // more uninstall, so pick one and keep it.
+    signingConfigs {
+        create("zbitx") {
+            storeFile = file(System.getenv("ZBITX_KEYSTORE") ?: "zbitx-remote.keystore")
+            storePassword = System.getenv("ZBITX_KEYSTORE_PASSWORD") ?: "zbitxremote"
+            keyAlias = System.getenv("ZBITX_KEY_ALIAS") ?: "zbitx"
+            keyPassword = System.getenv("ZBITX_KEY_PASSWORD") ?: "zbitxremote"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("zbitx")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("zbitx")
         }
     }
     compileOptions {

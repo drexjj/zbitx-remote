@@ -387,6 +387,61 @@ class SbitxClient(
     /** Clear the radio's logger fields. */
     fun wipeLogger() = sendCommand("WIPE")
 
+    // ------------------------------------------------------------ logbook
+    // The radio's SQLite logbook (logbook.c logbook_query()):
+    //   "logbook=0 [prefix]"   -> latest 50 QSOs (optionally callsign prefix)
+    //   "logbook=<id> [prefix]"  -> 50 QSOs older than <id>
+    //   "logbook=-<id> [prefix]" -> QSOs newer than <id>
+    // Each comes back as "QSO id|mode|freq|date|time|mycall|rst_sent|exch_sent|
+    //   call|rst_recv|exch_recv|comments|".
+
+    data class Qso(
+        val id: Int, val mode: String, val freq: String, val date: String, val time: String,
+        val rstSent: String, val exchSent: String,
+        val call: String, val rstRecv: String, val exchRecv: String, val comment: String,
+    )
+
+    private val _logbook = MutableStateFlow<List<Qso>>(emptyList())
+    /** QSOs received so far, newest first. */
+    val logbook: StateFlow<List<Qso>> = _logbook
+
+    /** Current callsign-prefix filter for the logbook ("" = all). */
+    @Volatile var logbookQuery: String = ""
+        private set
+
+    /** Load the latest 50 QSOs, replacing what is shown. [prefix] filters by callsign. */
+    fun loadLogbook(prefix: String = logbookQuery) {
+        logbookQuery = prefix.uppercase().filter { it.isLetterOrDigit() || it == '/' }.take(12)
+        _logbook.value = emptyList()
+        requestLogbook(0)
+    }
+
+    /** Load the next 50 older QSOs. */
+    fun loadOlderQsos() {
+        val oldest = _logbook.value.lastOrNull()?.id ?: return
+        if (oldest > 1) requestLogbook(oldest)
+    }
+
+    /** Fetch QSOs logged since the newest one shown (after a "Logged:" message). */
+    fun loadNewerQsos() {
+        val newest = _logbook.value.firstOrNull()?.id ?: return requestLogbook(0)
+        requestLogbook(-newest)
+    }
+
+    private fun requestLogbook(fromId: Int) {
+        // the server crashes on "logbook" without a value, so always send one
+        sendCommand("logbook", if (logbookQuery.isEmpty()) "$fromId" else "$fromId $logbookQuery")
+    }
+
+    private fun parseQso(line: String) {
+        val t = line.trimEnd('\n', '\r').split('|')
+        if (t.size < 11) return
+        val id = t[0].trim().toIntOrNull() ?: return
+        val q = Qso(id, t[1], t[2], t[3], t[4], t[6], t[7], t[8], t[9], t[10], t.getOrElse(11) { "" })
+        val merged = (_logbook.value.filter { it.id != id } + q).sortedByDescending { it.id }
+        _logbook.value = merged.take(2000)
+    }
+
     /** Stream one chunk of mic PCM (int16 LE @ 8 kHz mono) while transmitting. */
     fun sendMicAudio(pcm: ByteArray) {
         ws?.send(pcm.toByteString())
@@ -426,6 +481,7 @@ class SbitxClient(
                 state.value = ConnState.SESSION_ENDED
                 ws?.close(1000, "server quit")
             }
+            text.startsWith("QSO ") -> parseQso(text.removePrefix("QSO "))
             text.startsWith("macros_list") -> {
                 _macroFiles.value = text.removePrefix("macros_list").trim()
                     .split('|').map { it.trim() }.filter { it.isNotEmpty() }
@@ -445,6 +501,50 @@ class SbitxClient(
         }
     }
 
+    // ---- Console history, kept here (not in the UI) so it survives screen
+    // rotation and switching modes.
+
+    /** One FT8 line: kind = WSJTX-RX / WSJTX-TX / WSJTX-Q, text keeps the colour markup. */
+    data class Ft8Line(val kind: String, val text: String, val key: String)
+
+    private val _ft8Lines = MutableStateFlow<List<Ft8Line>>(emptyList())
+    val ft8Lines: StateFlow<List<Ft8Line>> = _ft8Lines
+
+    /** CW/FLDIGI text as (isTx, text) runs. */
+    private val _cwText = MutableStateFlow<List<Pair<Boolean, String>>>(emptyList())
+    val cwText: StateFlow<List<Pair<Boolean, String>>> = _cwText
+
+    /** Last plain LOG line from the radio (e.g. "Logged: ..."). */
+    private val _lastLogLine = MutableStateFlow("")
+    val lastLogLine: StateFlow<String> = _lastLogLine
+
+    private fun recordConsole(kind: String, body: String) {
+        when {
+            kind == "LOG" -> stripMarkup(body).trim().takeIf { it.isNotEmpty() }?.let { _lastLogLine.value = it }
+            kind.startsWith("WSJTX") -> {
+                val text = body.trimEnd('\n', ' ')
+                if (text.length < 20) return
+                // de-duplicate like the web UI: everything from '~' on is the message
+                val plain = stripMarkup(text)
+                val key = plain.substringAfter('~', plain).replace(Regex("\\s+"), " ").trim()
+                val list = _ft8Lines.value.toMutableList()
+                val existing = list.indexOfLast { it.key == key && it.kind == kind }
+                if (existing >= 0 && existing >= list.size - 30) list.removeAt(existing)
+                list.add(Ft8Line(kind, text, key))
+                _ft8Lines.value = list.takeLast(200)
+            }
+            kind == "CW-RX" || kind == "FLDIGI-RX" || kind == "CW-TX" || kind == "FLDIGI-TX" -> {
+                val tx = kind.endsWith("TX")
+                val t = stripMarkup(body)
+                val list = _cwText.value.toMutableList()
+                if (list.isNotEmpty() && list.last().first == tx)
+                    list[list.size - 1] = tx to (list.last().second + t).takeLast(1500)
+                else list.add(tx to t)
+                _cwText.value = list.takeLast(40)
+            }
+        }
+    }
+
     /** Console frames are capped at 2000 chars, so a tag can straddle two frames. */
     private fun parseConsole(payload: String) {
         val buf: String
@@ -457,7 +557,13 @@ class SbitxClient(
         for (m in consoleTag.findAll(buf)) {
             consumed = m.range.last + 1
             val body = decodeEntities(m.groupValues[2])
-            if (body.isNotBlank()) _console.tryEmit(ConsoleLine(m.groupValues[1], body))
+            if (body.isNotBlank()) {
+                _console.tryEmit(ConsoleLine(m.groupValues[1], body))
+                recordConsole(m.groupValues[1], body)
+            }
+            // a QSO was just saved on the radio: pull it into the logbook view
+            if (m.groupValues[1] == "LOG" && stripMarkup(body).trimStart().startsWith("Logged:")
+                && _logbook.value.isNotEmpty()) loadNewerQsos()
         }
         // keep an unfinished tag for the next frame (bounded, in case of garbage)
         val rest = buf.substring(consumed)

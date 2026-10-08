@@ -269,8 +269,6 @@ fun FreqDigits(freq: Long, selectedMult: Long, onSelect: (Long) -> Unit) {
 
 // ============================================================== FT8 console
 
-private data class Ft8Row(val kind: String, val text: String, val key: String)
-
 /**
  * FT8 panel, working the way the zBitx web UI does:
  *  - TAP a decode to answer it. The app sends "FT8 <decode>" and the radio's own
@@ -281,36 +279,21 @@ private data class Ft8Row(val kind: String, val text: String, val key: String)
  *  - F1..F12 come from the selected FT8 macro file on the radio.
  */
 @Composable
-fun Ft8Console(client: SbitxClient) {
+fun Ft8Console(client: SbitxClient, onOpenLog: () -> Unit = {}) {
     val fields by client.fields.collectAsState()
     val myCall = (fields["MYCALLSIGN"] ?: "").uppercase()
     val myGrid = (fields["MYGRID"] ?: "").uppercase().take(4)
     val auto = fields["FT8_AUTO"] == "ON"
     val call = fields["CALL"].orEmpty()
 
-    val rows = remember { mutableStateListOf<Ft8Row>() }
-    val listState = rememberLazyListState()
+    // history lives in the client so it survives rotation and mode switches
+    val rows by client.ft8Lines.collectAsState()
+    val lastLog by client.lastLogLine.collectAsState()
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (rows.size - 1).coerceAtLeast(0))
     var msg by remember { mutableStateOf("") }
-    var lastLog by remember { mutableStateOf("") }
 
-    LaunchedEffect(client) {
-        client.console.collect { cl ->
-            if (cl.kind == "LOG") {
-                SbitxClient.stripMarkup(cl.text).trim().takeIf { it.isNotEmpty() }?.let { lastLog = it }
-                return@collect
-            }
-            if (!cl.kind.startsWith("WSJTX")) return@collect
-            val text = cl.text.trimEnd('\n', ' ')
-            if (text.length < 20) return@collect
-            // de-duplicate the way the web UI does: everything from '~' on is the message
-            val plain = SbitxClient.stripMarkup(text)
-            val key = plain.substringAfter('~', plain).replace(Regex("\\s+"), " ").trim()
-            val existing = rows.indexOfLast { it.key == key && it.kind == cl.kind }
-            if (existing >= 0 && existing >= rows.size - 30) rows.removeAt(existing)
-            rows.add(Ft8Row(cl.kind, text, key))
-            while (rows.size > 200) rows.removeAt(0)
-            listState.animateScrollToItem(rows.size - 1)
-        }
+    LaunchedEffect(rows.size, rows.lastOrNull()) {
+        if (rows.isNotEmpty()) listState.animateScrollToItem(rows.size - 1)
     }
 
     Column(
@@ -370,6 +353,8 @@ fun Ft8Console(client: SbitxClient) {
     }
 
     Spacer(Modifier.height(6.dp))
+    LoggerRow(client, LoggerStyle.FT8, onOpenLog)
+    Spacer(Modifier.height(6.dp))
     MacroPanel(client, MacroGroup.FT8)
 
     Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -420,26 +405,11 @@ fun Ft8Btn(label: String, enabled: Boolean, danger: Boolean = false, onClick: ()
  * "F<n>") and zBitx keys the transmitter itself.
  */
 @Composable
-fun CwConsole(client: SbitxClient) {
+fun CwConsole(client: SbitxClient, onOpenLog: () -> Unit = {}) {
     val fields by client.fields.collectAsState()
-    val segments = remember { mutableStateListOf<Pair<Boolean, String>>() } // (isTx, text)
+    val segments by client.cwText.collectAsState()      // (isTx, text), kept in the client
     var outgoing by remember { mutableStateOf("") }
     val scroll = rememberScrollState()
-
-    LaunchedEffect(client) {
-        client.console.collect { cl ->
-            val tx = when (cl.kind) {
-                "CW-RX", "FLDIGI-RX" -> false
-                "CW-TX", "FLDIGI-TX" -> true
-                else -> return@collect
-            }
-            val t = SbitxClient.stripMarkup(cl.text)
-            if (segments.isNotEmpty() && segments.last().first == tx) {
-                segments[segments.size - 1] = tx to (segments.last().second + t).takeLast(1500)
-            } else segments.add(tx to t)
-            while (segments.size > 40) segments.removeAt(0)
-        }
-    }
     LaunchedEffect(segments.size, segments.lastOrNull()?.second?.length) { scroll.animateScrollTo(scroll.maxValue) }
 
     Column(Modifier.fillMaxWidth().background(Color(0xFF10141A), RoundedCornerShape(8.dp)).padding(6.dp)) {
@@ -477,7 +447,7 @@ fun CwConsole(client: SbitxClient) {
         }
     }
     Spacer(Modifier.height(6.dp))
-    LoggerRow(client)
+    LoggerRow(client, LoggerStyle.CW, onOpenLog)
     Spacer(Modifier.height(6.dp))
     MacroPanel(client, MacroGroup.CW)
 }

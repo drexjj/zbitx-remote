@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full history + tags for the version name
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -33,19 +35,32 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Build APK
-        run: gradle assembleDebug --no-daemon
-
-      - name: Rename APK
+      # Version shown in the app: the tag on a tag build (v1.0.2), otherwise
+      # the last tag plus commits since it (v1.0.1-3-g1a2b3c4).
+      # Version code: the run number, which goes up on every build, so each new
+      # APK installs over the previous one.
+      - name: Compute version
+        id: ver
         run: |
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             VERSION="${GITHUB_REF_NAME}"
           else
-            VERSION="dev-${GITHUB_SHA::7}"
+            VERSION="$(git describe --tags --always)"
           fi
+          echo "name=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "code=$(( 100 + ${{ github.run_number }} ))" >> "$GITHUB_OUTPUT"
+          echo "Building ${VERSION} (code $(( 100 + ${{ github.run_number }} )))"
 
+      - name: Build APK
+        run: >
+          gradle assembleDebug --no-daemon
+          -PrelVersion="${{ steps.ver.outputs.name }}"
+          -PverCode=${{ steps.ver.outputs.code }}
+
+      - name: Rename APK
+        run: |
           cp app/build/outputs/apk/debug/app-debug.apk \
-             "zBitx-Remote-${VERSION}.apk"
+             "zBitx-Remote-${{ steps.ver.outputs.name }}.apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

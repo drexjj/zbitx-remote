@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
@@ -29,7 +30,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.sbitx.remote.net.SbitxClient
@@ -202,7 +205,7 @@ fun ConnectScreen(service: RadioService?, state: ConnState, client: SbitxClient?
             Text(msg, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
         }
         Spacer(Modifier.height(8.dp))
-        Text("Status: $state   •   ${com.sbitx.remote.BuildConfig.VERSION_NAME}",
+        Text("Status: $state   •   ${appVersion()}",
             style = MaterialTheme.typography.bodySmall)
     }
 }
@@ -222,6 +225,10 @@ fun RadioPanel(client: SbitxClient, service: RadioService, state: ConnState) {
     val mode = fields["MODE"] ?: "?"
     val pitch = fields["PITCH"]?.toIntOrNull() ?: 600
     var pttHeld by remember { mutableStateOf(false) }
+    var selectedMult by remember { mutableStateOf(100L) }
+    var freqText by remember { mutableStateOf("") }
+    var showLog by remember { mutableStateOf(false) }
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     // ---- Local tuning target: the knob/waterfall move this immediately and a
     // 40 ms sender forwards only the latest value. zBitx queues remote commands
@@ -247,20 +254,28 @@ fun RadioPanel(client: SbitxClient, service: RadioService, state: ConnState) {
     }
     fun tuneBy(d: Long) = tuneTo((if (target > 0) target else radioFreq) + d)
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 8.dp)) {
+    if (showLog) LogbookDialog(client) { showLog = false }
 
-        // ================= HEADER =================
-        var selectedMult by remember { mutableStateOf(100L) }
+    // ================= HEADER =================
+    val header: @Composable () -> Unit = {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("zBitx Remote", style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.weight(1f))
+            Column(Modifier.weight(1f)) {
+                Text("zBitx Remote", style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                Text(appVersion(), fontSize = 10.sp, color = Color(0x88FFFFFF), maxLines = 1)
+            }
             Text(fields["STATUS"]?.substringAfter(' ') ?: "", fontSize = 11.sp,
-                color = Color(0x99FFFFFF), modifier = Modifier.padding(end = 8.dp))
+                color = Color(0x99FFFFFF), modifier = Modifier.padding(end = 6.dp))
+            OutlinedButton(
+                onClick = { showLog = true },
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                modifier = Modifier.height(34.dp)
+            ) { Text("Log", fontSize = 12.sp) }
+            Spacer(Modifier.width(6.dp))
             OutlinedButton(
                 onClick = { service.disconnect() },
                 border = BorderStroke(1.dp, Color(0xFFEF5350)),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF5350)),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
                 modifier = Modifier.height(34.dp)
             ) { Text("Disconnect", fontSize = 12.sp) }
         }
@@ -281,208 +296,241 @@ fun RadioPanel(client: SbitxClient, service: RadioService, state: ConnState) {
         }
         MeterRow(fields, onAir, mode, stepName(selectedMult))
         Spacer(Modifier.height(4.dp))
+    }
 
-        // ================= SCROLLABLE CONTROLS =================
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            // ---- Frequency entry ----
-            var freqText by remember { mutableStateOf("") }
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                OutlinedTextField(
-                    freqText, { freqText = it },
-                    label = { Text("kHz", fontSize = 10.sp) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
-                    modifier = Modifier.weight(1f).height(52.dp)
-                )
-                TuneBtn("Go") {
-                    freqText.toDoubleOrNull()?.let { tuneTo((it * 1000).toLong()); freqText = "" }
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                BandDropdown(Modifier.weight(1f), shownFreq) { client.setBand(it) }
-                ModeDropdown(Modifier.weight(1f), mode) { client.setMode(it) }
-            }
-            Spacer(Modifier.height(4.dp))
-
-            // ---- Waterfall: tap to tune, drag to pan ----
-            Waterfall(
-                client = client,
-                mode = mode,
-                low = fields["LOW"]?.toIntOrNull() ?: 300,
-                high = fields["HIGH"]?.toIntOrNull() ?: 3000,
-                txPitch = fields["TX_PITCH"]?.toIntOrNull(),
-                modifier = Modifier.fillMaxWidth().height(if (mode == "FT8") 90.dp else 120.dp),
-                onTap = { off ->
-                    when (mode) {
-                        "CW" -> tuneBy((off - pitch).toLong())
-                        "CWR" -> tuneBy((off + pitch).toLong())
-                        "FT8" -> if (off in 100..3000) client.setTxPitch((off / 10) * 10)
-                                 else tuneBy(off.toLong())
-                        else -> tuneTo(((shownFreq + off) / 10) * 10)
-                    }
-                },
-                onDrag = { hz -> tuneBy(hz) }
+    // ================= SCROLLABLE CONTROLS =================
+    val controls: @Composable () -> Unit = {
+        // ---- Frequency entry ----
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            OutlinedTextField(
+                freqText, { freqText = it },
+                label = { Text("kHz", fontSize = 10.sp) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
+                modifier = Modifier.weight(1f).height(52.dp)
             )
-            Row(
-                Modifier.fillMaxWidth().padding(top = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Span", fontSize = 11.sp)
-                val span = fields["SPAN"] ?: ""
-                listOf("25K", "10K", "6K", "2.5K").forEach { s ->
-                    SmallChip(s, selected = span == s) { client.setSpan(s) }
-                }
-                Spacer(Modifier.weight(1f))
-                Text(
-                    if (mode == "FT8") "tap = TX tone" else "tap = tune",
-                    fontSize = 10.sp, color = Color(0x88FFFFFF)
-                )
-            }
-            Spacer(Modifier.height(4.dp))
-
-            // ---- Mode-specific consoles ----
-            if (mode == "FT8") {
-                Ft8Console(client)
-                Spacer(Modifier.height(6.dp))
-            }
-            if (mode in CW_MODES) {
-                CwConsole(client)
-                Spacer(Modifier.height(6.dp))
-            }
-
-            // ---- Levels ----
-            Row(Modifier.fillMaxWidth()) {
-                LabeledSlider("Volume", fields["AUDIO"]?.toIntOrNull() ?: 60, 0..100,
-                    modifier = Modifier.weight(1f)) { client.setVolume(it) }
-                Spacer(Modifier.width(12.dp))
-                LabeledSlider("IF gain", fields["IF"]?.toIntOrNull() ?: 60, 0..100,
-                    modifier = Modifier.weight(1f)) { client.setIfGain(it) }
-            }
-            Row(Modifier.fillMaxWidth()) {
-                LabeledSlider("TX drive", fields["DRIVE"]?.toIntOrNull() ?: 40, 0..100, step = 5,
-                    modifier = Modifier.weight(1f)) { client.setDrive(it) }
-                Spacer(Modifier.width(12.dp))
-                LabeledSlider("Bandwidth", fields["BW"]?.toIntOrNull()
-                        ?: ((fields["HIGH"]?.toIntOrNull() ?: 3000) - (fields["LOW"]?.toIntOrNull() ?: 300)),
-                    50..5000, step = 50, display = { "$it Hz" },
-                    modifier = Modifier.weight(1f)) { client.setBandwidth(it) }
-            }
-            if (mode in VOICE_MODES) {
-                Row(Modifier.fillMaxWidth()) {
-                    FloatSlider(
-                        "Phone mic", micGain, 0.25f..6f,
-                        display = { "%.1fx".format(it) },
-                        modifier = Modifier.weight(1f)
-                    ) { service.setPhoneMicGain(it) }
-                    Spacer(Modifier.width(12.dp))
-                    LabeledSlider("Compressor", fields["COMP"]?.toIntOrNull() ?: 0, 0..10,
-                        display = { if (it == 0) "off" else "$it" },
-                        modifier = Modifier.weight(1f)) { client.setComp(it) }
-                }
-            }
-            if (mode in CW_MODES) {
-                Row(Modifier.fillMaxWidth()) {
-                    LabeledSlider("WPM", fields["WPM"]?.toIntOrNull() ?: 12, 5..40,
-                        modifier = Modifier.weight(1f)) { client.setWpm(it) }
-                    Spacer(Modifier.width(12.dp))
-                    LabeledSlider("Pitch", pitch, 300..1200, step = 10, display = { "$it Hz" },
-                        modifier = Modifier.weight(1f)) { client.setPitch(it) }
-                }
-            }
-
-            // ---- Receiver DSP + misc toggles (zBitx plugins) ----
-            Row(
-                Modifier.fillMaxWidth().padding(top = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                listOf("ANR", "DSP", "NOTCH").forEach { lbl ->
-                    val on = fields[lbl] == "ON"
-                    SmallChip(lbl, selected = on) { client.setToggle(lbl, !on) }
-                }
-                val agc = fields["AGC"] ?: "SLOW"
-                SmallChip("AGC $agc", selected = agc != "OFF") {
-                    val opts = listOf("OFF", "SLOW", "MED", "FAST")
-                    client.setAgc(opts[(opts.indexOf(agc) + 1).mod(opts.size)])
-                }
-            }
-            Row(
-                Modifier.fillMaxWidth().padding(top = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                val split = fields["SPLIT"] == "ON"
-                SmallChip("SPLIT", selected = split) { client.setSplit(!split) }
-                val lock = fields["VFOLK"] == "ON"
-                SmallChip("LOCK", selected = lock) { client.setToggle("VFOLK", !lock) }
-                val tuning = fields["TUNE"] == "ON"
-                SmallChip(if (tuning) "TUNING…" else "TUNE ${fields["TNPWR"] ?: ""}".trim(),
-                    selected = tuning, warn = true) { client.tune(!tuning) }
-            }
-            Spacer(Modifier.height(4.dp))
-        }
-
-        // ================= FIXED: knob + PTT =================
-        Box(Modifier.fillMaxWidth().padding(top = 4.dp), contentAlignment = Alignment.Center) {
-            Box(contentAlignment = Alignment.Center) {
-                TuningKnob(
-                    modifier = Modifier.size(if (mode in VOICE_MODES) 120.dp else 140.dp),
-                    onDelta = { steps -> if (fields["VFOLK"] != "ON") tuneBy(steps * selectedMult) }
-                )
-                Text("↺ ↻", fontSize = 14.sp, color = Color(0x66FFFFFF))
+            TuneBtn("Go") {
+                freqText.toDoubleOrNull()?.let { tuneTo((it * 1000).toLong()); freqText = "" }
             }
         }
-        // PTT only for phone modes; CW and FT8 are keyed by the radio from the text buffer.
+        Spacer(Modifier.height(4.dp))
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BandDropdown(Modifier.weight(1f), shownFreq) { client.setBand(it) }
+            ModeDropdown(Modifier.weight(1f), mode) { client.setMode(it) }
+        }
+        Spacer(Modifier.height(4.dp))
+
+        // ---- Waterfall: tap to tune, drag to pan ----
+        Waterfall(
+            client = client,
+            mode = mode,
+            low = fields["LOW"]?.toIntOrNull() ?: 300,
+            high = fields["HIGH"]?.toIntOrNull() ?: 3000,
+            txPitch = fields["TX_PITCH"]?.toIntOrNull(),
+            modifier = Modifier.fillMaxWidth().height(if (mode == "FT8") 90.dp else 120.dp),
+            onTap = { off ->
+                when (mode) {
+                    "CW" -> tuneBy((off - pitch).toLong())
+                    "CWR" -> tuneBy((off + pitch).toLong())
+                    "FT8" -> if (off in 100..3000) client.setTxPitch((off / 10) * 10)
+                             else tuneBy(off.toLong())
+                    else -> tuneTo(((shownFreq + off) / 10) * 10)
+                }
+            },
+            onDrag = { hz -> tuneBy(hz) }
+        )
+        Row(
+            Modifier.fillMaxWidth().padding(top = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Span", fontSize = 11.sp)
+            val span = fields["SPAN"] ?: ""
+            listOf("25K", "10K", "6K", "2.5K").forEach { s ->
+                SmallChip(s, selected = span == s) { client.setSpan(s) }
+            }
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (mode == "FT8") "tap = TX tone" else "tap = tune",
+                fontSize = 10.sp, color = Color(0x88FFFFFF)
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+
+        // ---- Mode-specific consoles ----
+        if (mode == "FT8") {
+            Ft8Console(client) { showLog = true }
+            Spacer(Modifier.height(6.dp))
+        }
+        if (mode in CW_MODES) {
+            CwConsole(client) { showLog = true }
+            Spacer(Modifier.height(6.dp))
+        }
+
+        // ---- Levels ----
+        Row(Modifier.fillMaxWidth()) {
+            LabeledSlider("Volume", fields["AUDIO"]?.toIntOrNull() ?: 60, 0..100,
+                modifier = Modifier.weight(1f)) { client.setVolume(it) }
+            Spacer(Modifier.width(12.dp))
+            LabeledSlider("IF gain", fields["IF"]?.toIntOrNull() ?: 60, 0..100,
+                modifier = Modifier.weight(1f)) { client.setIfGain(it) }
+        }
+        Row(Modifier.fillMaxWidth()) {
+            LabeledSlider("TX drive", fields["DRIVE"]?.toIntOrNull() ?: 40, 0..100, step = 5,
+                modifier = Modifier.weight(1f)) { client.setDrive(it) }
+            Spacer(Modifier.width(12.dp))
+            LabeledSlider("Bandwidth", fields["BW"]?.toIntOrNull()
+                    ?: ((fields["HIGH"]?.toIntOrNull() ?: 3000) - (fields["LOW"]?.toIntOrNull() ?: 300)),
+                50..5000, step = 50, display = { "$it Hz" },
+                modifier = Modifier.weight(1f)) { client.setBandwidth(it) }
+        }
         if (mode in VOICE_MODES) {
-            val bg = when {
-                onAir -> Color(0xFFB71C1C)
-                pttHeld -> Color(0xFFE65100)       // pressed, radio not confirmed yet
-                else -> Color(0xFF1B5E20)
+            Row(Modifier.fillMaxWidth()) {
+                FloatSlider(
+                    "Phone mic", micGain, 0.25f..6f,
+                    display = { "%.1fx".format(it) },
+                    modifier = Modifier.weight(1f)
+                ) { service.setPhoneMicGain(it) }
+                Spacer(Modifier.width(12.dp))
+                LabeledSlider("Compressor", fields["COMP"]?.toIntOrNull() ?: 0, 0..10,
+                    display = { if (it == 0) "off" else "$it" },
+                    modifier = Modifier.weight(1f)) { client.setComp(it) }
             }
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(80.dp)
-                    .padding(top = 4.dp)
-                    .background(bg, RoundedCornerShape(16.dp))
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onPress = {
-                                pttHeld = true
-                                service.pttDown()
-                                tryAwaitRelease()
-                                pttHeld = false
-                                service.pttUp()
-                            }
-                        )
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        when {
-                            onAir && pttHeld -> "ON AIR - release to RX"
-                            onAir -> "ON AIR"
-                            pttHeld -> "Keying…"
-                            else -> "HOLD TO TALK (PTT)"
-                        },
-                        color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold
+        }
+        if (mode in CW_MODES) {
+            Row(Modifier.fillMaxWidth()) {
+                LabeledSlider("WPM", fields["WPM"]?.toIntOrNull() ?: 12, 5..40,
+                    modifier = Modifier.weight(1f)) { client.setWpm(it) }
+                Spacer(Modifier.width(12.dp))
+                LabeledSlider("Pitch", pitch, 300..1200, step = 10, display = { "$it Hz" },
+                    modifier = Modifier.weight(1f)) { client.setPitch(it) }
+            }
+        }
+
+        // ---- Receiver DSP + misc toggles (zBitx plugins) ----
+        Row(
+            Modifier.fillMaxWidth().padding(top = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            listOf("ANR", "DSP", "NOTCH").forEach { lbl ->
+                val on = fields[lbl] == "ON"
+                SmallChip(lbl, selected = on) { client.setToggle(lbl, !on) }
+            }
+            val agc = fields["AGC"] ?: "SLOW"
+            SmallChip("AGC $agc", selected = agc != "OFF") {
+                val opts = listOf("OFF", "SLOW", "MED", "FAST")
+                client.setAgc(opts[(opts.indexOf(agc) + 1).mod(opts.size)])
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(top = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val split = fields["SPLIT"] == "ON"
+            SmallChip("SPLIT", selected = split) { client.setSplit(!split) }
+            val lock = fields["VFOLK"] == "ON"
+            SmallChip("LOCK", selected = lock) { client.setToggle("VFOLK", !lock) }
+            val tuning = fields["TUNE"] == "ON"
+            SmallChip(if (tuning) "TUNING…" else "TUNE ${fields["TNPWR"] ?: ""}".trim(),
+                selected = tuning, warn = true) { client.tune(!tuning) }
+        }
+        Spacer(Modifier.height(4.dp))
+    }
+
+    // ================= KNOB =================
+    val knob: @Composable (Dp) -> Unit = { size ->
+        Box(contentAlignment = Alignment.Center) {
+            TuningKnob(
+                modifier = Modifier.size(size),
+                onDelta = { steps -> if (fields["VFOLK"] != "ON") tuneBy(steps * selectedMult) }
+            )
+            Text("↺ ↻", fontSize = 14.sp, color = Color(0x66FFFFFF))
+        }
+    }
+
+    // ================= PTT (phone modes only; CW/FT8 are keyed by the radio) =================
+    val ptt: @Composable (Modifier) -> Unit = { mod ->
+        val bg = when {
+            onAir -> Color(0xFFB71C1C)
+            pttHeld -> Color(0xFFE65100)       // pressed, radio not confirmed yet
+            else -> Color(0xFF1B5E20)
+        }
+        Box(
+            mod
+                .background(bg, RoundedCornerShape(16.dp))
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onPress = {
+                            pttHeld = true
+                            service.pttDown()
+                            tryAwaitRelease()
+                            pttHeld = false
+                            service.pttUp()
+                        }
                     )
-                    if (pttHeld) MicLevel(service)
-                    if (micError) Text("Phone mic unavailable - check the microphone permission",
-                        color = Color.White, fontSize = 11.sp)
-                }
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    when {
+                        onAir && pttHeld -> "ON AIR - release to RX"
+                        onAir -> "ON AIR"
+                        pttHeld -> "Keying…"
+                        else -> "HOLD TO TALK (PTT)"
+                    },
+                    color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                if (pttHeld) MicLevel(service)
+                if (micError) Text("Phone mic unavailable - check the microphone permission",
+                    color = Color.White, fontSize = 11.sp, textAlign = TextAlign.Center)
             }
         }
     }
+
+    if (landscape) {
+        // Controls on the left, knob + PTT on the right where the thumb is.
+        Row(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 6.dp)) {
+            Column(Modifier.weight(1f).fillMaxHeight()) {
+                header()
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) { controls() }
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(
+                Modifier.width(210.dp).fillMaxHeight(),
+                verticalArrangement = Arrangement.SpaceEvenly,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                knob(if (mode in VOICE_MODES) 140.dp else 170.dp)
+                if (mode in VOICE_MODES) ptt(Modifier.fillMaxWidth().height(110.dp))
+            }
+        }
+    } else {
+        Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 8.dp)) {
+            header()
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) { controls() }
+            Box(Modifier.fillMaxWidth().padding(top = 4.dp), contentAlignment = Alignment.Center) {
+                knob(if (mode in VOICE_MODES) 120.dp else 140.dp)
+            }
+            if (mode in VOICE_MODES) ptt(Modifier.fillMaxWidth().padding(top = 4.dp).height(76.dp))
+        }
+    }
+}
+
+/** e.g. "v1.02 (build 37)" - set by CI from the git tag and run number. */
+fun appVersion(): String {
+    val name = com.sbitx.remote.BuildConfig.VERSION_NAME
+    val code = com.sbitx.remote.BuildConfig.VERSION_CODE
+    return if (code > 1) "$name (build $code)" else name
 }
 
 /** S-meter normally; forward power and SWR while the radio is transmitting. */
