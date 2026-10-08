@@ -276,7 +276,9 @@ private data class Ft8Row(val kind: String, val text: String, val key: String)
  *  - TAP a decode to answer it. The app sends "FT8 <decode>" and the radio's own
  *    ft8_process() fills the logger and sequences the whole QSO (and logs it
  *    when FT8_AUTO is on). Tapping one of your own TX lines re-sends it.
- *  - LONG-PRESS a decode to just pick the callsign for the manual messages.
+ *  - LONG-PRESS a decode to put that station in the radio's CALL field, so the
+ *    macro keys ("!" = CALL) address it.
+ *  - F1..F12 come from the selected FT8 macro file on the radio.
  */
 @Composable
 fun Ft8Console(client: SbitxClient) {
@@ -284,13 +286,11 @@ fun Ft8Console(client: SbitxClient) {
     val myCall = (fields["MYCALLSIGN"] ?: "").uppercase()
     val myGrid = (fields["MYGRID"] ?: "").uppercase().take(4)
     val auto = fields["FT8_AUTO"] == "ON"
-    val inQso = (fields["CALL"] ?: "").isNotBlank()
+    val call = fields["CALL"].orEmpty()
 
     val rows = remember { mutableStateListOf<Ft8Row>() }
     val listState = rememberLazyListState()
     var msg by remember { mutableStateOf("") }
-    var dxCall by remember { mutableStateOf("") }
-    var cqMod by remember { mutableStateOf("") }
     var lastLog by remember { mutableStateOf("") }
 
     LaunchedEffect(client) {
@@ -319,9 +319,13 @@ fun Ft8Console(client: SbitxClient) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 if (myCall.isBlank() || myCall == "CALL") "FT8  (set MYCALLSIGN on the radio)"
-                else "FT8  $myCall $myGrid" + (fields["CALL"]?.takeIf { it.isNotBlank() }?.let { "  ⇄  $it" } ?: ""),
+                else "FT8  $myCall $myGrid" + (if (call.isNotBlank()) "  ⇄  $call" else ""),
                 fontSize = 12.sp, color = Color(0xFF81C784), modifier = Modifier.weight(1f)
             )
+            if (call.isNotBlank()) {
+                Text("clear", fontSize = 11.sp, color = Color(0xFF90CAF9),
+                    modifier = Modifier.clickable { client.wipeLogger() }.padding(horizontal = 6.dp))
+            }
             Text("Auto", fontSize = 11.sp)
             Switch(checked = auto, onCheckedChange = { client.setFt8Auto(it) },
                 modifier = Modifier.height(24.dp).padding(start = 4.dp))
@@ -348,7 +352,9 @@ fun Ft8Console(client: SbitxClient) {
                                         client.ft8Reply(row.text)
                                     }
                                 },
-                                onLongPress = { pickCall(row.text, myCall)?.let { dxCall = it } }
+                                onLongPress = {
+                                    pickCall(row.text, myCall)?.let { client.setLogField("CALL", it) }
+                                }
                             )
                         }
                         .padding(vertical = 1.dp)
@@ -359,46 +365,28 @@ fun Ft8Console(client: SbitxClient) {
             Text(lastLog, fontSize = 11.sp, color = Color(0xFFB3B3B3), maxLines = 1,
                 overflow = TextOverflow.Ellipsis)
         }
-
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                cqMod, { cqMod = it.uppercase().trim() },
-                label = { Text("CQ mod", fontSize = 10.sp) },
-                singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp),
-                modifier = Modifier.width(86.dp)
-            )
-            Ft8Btn("CQ", myCall.isNotBlank()) {
-                client.ft8Transmit(listOf("CQ", cqMod, myCall, myGrid).filter { it.isNotBlank() }.joinToString(" "))
-            }
-            Ft8Btn("Stop", true, danger = true) { client.abortTx() }
-            Ft8Btn("Call $dxCall".trim(), dxCall.isNotBlank()) { msg = "$dxCall $myCall $myGrid".trim() }
-            Ft8Btn("RR73", dxCall.isNotBlank()) { msg = "$dxCall $myCall RR73" }
-            Ft8Btn("73", dxCall.isNotBlank()) { msg = "$dxCall $myCall 73" }
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                msg, { msg = it.uppercase() },
-                label = { Text(if (inQso) "Message (radio is sequencing a QSO)" else "Free message", fontSize = 11.sp) },
-                singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(6.dp))
-            Button(onClick = { if (msg.isNotBlank()) { client.ft8Transmit(msg); msg = "" } },
-                enabled = msg.isNotBlank()) { Text("Send") }
-        }
-        Text("Tap a decode to answer it (radio runs the QSO). Long-press to pick the call.",
+        Text("Tap a decode to answer it (radio runs the QSO). Long-press to set CALL for the macros.",
             fontSize = 10.sp, color = Color(0x88FFFFFF))
+    }
+
+    Spacer(Modifier.height(6.dp))
+    MacroPanel(client, MacroGroup.FT8)
+
+    Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            msg, { msg = it.uppercase() },
+            label = { Text("Free FT8 message", fontSize = 11.sp) },
+            singleLine = true,
+            textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(Modifier.width(6.dp))
+        Button(onClick = { if (msg.isNotBlank()) { client.ft8Transmit(msg); msg = "" } },
+            enabled = msg.isNotBlank()) { Text("Send") }
     }
 }
 
-/** The caller of a decode: the 'R'-styled span, else the sender token. */
+/** The other station in a decode: the 'R'-styled span, else the sender token. */
 private fun pickCall(text: String, myCall: String): String? {
     decoSpans(text).firstOrNull { it.first == 'R' }?.second?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
     val toks = SbitxClient.normalizeFt8(text)?.split(' ') ?: return null
@@ -418,20 +406,22 @@ fun Ft8Btn(label: String, enabled: Boolean, danger: Boolean = false, onClick: ()
         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
         colors = if (danger) ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF5350))
                  else ButtonDefaults.outlinedButtonColors(),
-        modifier = Modifier.height(40.dp)
+        modifier = Modifier.height(36.dp)
     ) { Text(label, fontSize = 12.sp) }
 }
 
 // =============================================================== CW console
 
 /**
- * CW decode + keyboard. Decoded and sent text come in as CW-RX / CW-TX console
- * tags (FLDIGI-* too). Typed text goes into the radio's keyboard buffer with
- * "key ..." - the same path as the web UI's on-screen keyboard - and zBitx
- * keys the transmitter itself.
+ * CW / CWR panel: decoded and sent text, the radio's pending text buffer,
+ * type-to-send, the QSO logger the macros read from, and the macro keys.
+ * Decoded/sent text arrives as CW-RX / CW-TX console tags (FLDIGI-* too).
+ * Typed text and macros both land in the radio's text buffer ("key ..." /
+ * "F<n>") and zBitx keys the transmitter itself.
  */
 @Composable
 fun CwConsole(client: SbitxClient) {
+    val fields by client.fields.collectAsState()
     val segments = remember { mutableStateListOf<Pair<Boolean, String>>() } // (isTx, text)
     var outgoing by remember { mutableStateOf("") }
     val scroll = rememberScrollState()
@@ -465,10 +455,16 @@ fun CwConsole(client: SbitxClient) {
                 fontFamily = FontFamily.Monospace, fontSize = 13.sp
             )
         }
+        // what the radio still has to key (macros and typed text queue here)
+        val pending = fields["TEXT"].orEmpty().trim()
+        if (pending.isNotEmpty() && pending != "text box") {
+            Text("Sending: $pending", fontSize = 12.sp, fontFamily = FontFamily.Monospace,
+                color = Color(0xFFFFB74D), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 outgoing, { outgoing = it.uppercase() },
-                label = { Text("Send CW", fontSize = 11.sp) },
+                label = { Text("Type to send", fontSize = 11.sp) },
                 singleLine = true,
                 textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
                 modifier = Modifier.weight(1f)
@@ -478,10 +474,12 @@ fun CwConsole(client: SbitxClient) {
                 onClick = { if (outgoing.isNotBlank()) { client.sendKeys(outgoing + " "); outgoing = "" } },
                 enabled = outgoing.isNotBlank()
             ) { Text("Send") }
-            Spacer(Modifier.width(4.dp))
-            Ft8Btn("Stop", true, danger = true) { client.abortTx() }
         }
     }
+    Spacer(Modifier.height(6.dp))
+    LoggerRow(client)
+    Spacer(Modifier.height(6.dp))
+    MacroPanel(client, MacroGroup.CW)
 }
 
 // ======================================================== firmware markup

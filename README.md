@@ -16,8 +16,9 @@ Forked from [vis4573/sbitx-remote](https://github.com/vis4573/sbitx-remote) (VU3
 - 📶 **Frequency control** — tap a digit then turn the knob, direct kHz entry, VFO A/B, lock, split
 - 🎛️ **zBitx controls** — 80 m–10 m incl. 60 m, USB/LSB/AM/CW/CWR/FT8/DIGI, volume, IF gain, drive, bandwidth, compressor, AGC, ANR / DSP / NOTCH, TUNE
 - 📏 **Meters** — S-meter on receive, forward power and SWR on transmit
-- 📟 **FT8** — colour-coded decodes; **tap a decode and the radio runs the QSO** (same as the zBitx web UI), auto mode, CQ, Stop, free-text messages
-- ⌨️ **CW** — decoded text, type-to-send through the radio's keyer, WPM and pitch
+- 📟 **FT8** — colour-coded decodes; **tap a decode and the radio runs the QSO** (same as the zBitx web UI), auto mode, F1–F12 macros from the radio's FT8 macro file, Stop, free-text messages
+- ⌨️ **CW / CWR** — decoded text, type-to-send through the radio's keyer, F1–F12 macros, QSO logger (Call / Sent / Rcvd / exchange → Log), WPM and pitch
+- 🗂️ **Macro files** — pick any `.mc` file on the radio (`~/sbitx/web`); CW/CWR and FT8 each remember their own file (defaults CW1 and FT8). Tap a key to send, long-press to preview
 - 🔁 **Auto-reconnect** — rides out Wi-Fi/cellular drops with backoff; if the link dies while keyed, the radio is unkeyed as soon as it comes back
 - 📱 **Background-safe** — a foreground service keeps the session alive with the screen off
 
@@ -55,6 +56,7 @@ The app speaks the same WebSocket protocol as the zBitx web UI (`src/webserver.c
 - RX audio: int16 PCM, 16 kHz mono, returned for each `audio` poll (every 50 ms).
 - TX audio: int16 PCM, 8 kHz mono in 32 ms frames. The radio falls back to its own mic after 100 ms without a frame, and does **not** apply its MIC gain to remote audio — use the app's *Phone mic* slider (COMP and TX EQ still apply).
 - Spectrum: `RX `/`TX ` frames, 46.875 Hz per bin, highest frequency first.
+- Macros: `macros_list` lists the `.mc` files, `MACRO=<file>` loads one (the radio then sends `F1 <label>` … `F12 <label>`), `F<n>` runs a key on the radio. Macros read the radio's logger fields CALL/SENT/NR.
 - Console: `CONSOLE <WSJTX-RX>…</WSJTX-RX><CW-RX>…` tags, entity-escaped, possibly split across frames.
 
 ```
@@ -65,6 +67,7 @@ app/src/main/java/com/sbitx/remote/
   service/RadioService.kt  Foreground service, PTT sequencing
   ui/MainActivity.kt       Connect screen and main radio panel
   ui/Widgets.kt            Waterfall, meters, knob, FT8 and CW consoles
+  ui/Macros.kt             Macro file picker, F1–F12 keys, QSO logger
 ```
 
 ---

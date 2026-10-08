@@ -310,6 +310,83 @@ class SbitxClient(
 
     fun setFt8Auto(on: Boolean) = setToggle("FT8_AUTO", on)
 
+    // ------------------------------------------------------------- macros
+    //
+    // zBitx macros are N1MM-style .mc files in ~/sbitx/web on the Pi
+    // ("F1 CQ,cq cq de {MYCALL} k"). The radio holds ONE loaded file at a time
+    // (field MACRO). "MACRO=<name>" loads a file and the radio broadcasts the
+    // new key labels as fields F1..F12. "F<n>" runs a key on the radio, which
+    // expands the variables (! = CALL, * = MYCALL, {SENTRST} = SENT, {EXCH} = NR,
+    // {GRIDSQUARE}, ...) from its own logger and then keys CW from the text
+    // buffer, or queues the message for the next FT8 slot.
+
+    /** One F-key definition parsed from a .mc file (for previews). */
+    data class MacroKey(val key: Int, val label: String, val text: String)
+
+    private val _macroFiles = MutableStateFlow<List<String>>(emptyList())
+    /** Names of the .mc files on the radio (without extension). */
+    val macroFiles: StateFlow<List<String>> = _macroFiles
+
+    private val _macroDefs = MutableStateFlow<Map<String, List<MacroKey>>>(emptyMap())
+    /** Parsed contents of .mc files fetched so far, by file name. */
+    val macroDefs: StateFlow<Map<String, List<MacroKey>>> = _macroDefs
+
+    /** Ask the radio for its list of macro files (reply: "macros_list A|B|"). */
+    fun requestMacroFiles() = sendCommand("macros_list")
+
+    /** Load a macro file on the radio; F1..F12 then run from that file. */
+    fun loadMacroFile(name: String) {
+        if (name.isBlank() || name.length > 40) return
+        sendCommand("MACRO", name)
+        fetchMacroFile(name)
+    }
+
+    /** Run F-key [n] (1..12) from the radio's loaded macro file. */
+    fun runMacro(n: Int) {
+        if (n in 1..12) sendRaw("F$n")
+    }
+
+    /**
+     * Download <name>.mc from the radio's web server - the same file the zBitx
+     * web UI fetches - so the app can show what each key will send. Labels on
+     * the buttons come from the radio's own F1..F12 fields, so a failure here
+     * only loses the previews.
+     */
+    fun fetchMacroFile(name: String) {
+        if (name.isBlank() || _macroDefs.value.containsKey(name)) return
+        scope.launch {
+            val scheme = if (useTls) "https" else "http"
+            val url = okhttp3.HttpUrl.Builder()
+                .scheme(scheme).host(host).port(port)
+                .addPathSegment("$name.mc").build()
+            runCatching {
+                // the WebSocket client has no read timeout; a file fetch should
+                http.newBuilder().readTimeout(6, TimeUnit.SECONDS).build()
+                    .newCall(Request.Builder().url(url).build()).execute().use { r ->
+                    if (r.isSuccessful) r.body?.string() else null
+                }
+            }.getOrNull()?.let { body ->
+                _macroDefs.value = _macroDefs.value + (name to parseMacroFile(body))
+            }
+        }
+    }
+
+    // ------------------------------------------------------------- logger
+    // The radio's logger fields feed the macros (! = CALL, {SENTRST} = SENT,
+    // {EXCH} = NR). Values are upper-cased by the radio; CALL max 11 chars,
+    // the others max 7.
+
+    fun setLogField(label: String, value: String) {
+        val max = if (label == "CALL") 11 else 7
+        sendCommand(label, value.trim().uppercase().filter { it > ' ' && it != '=' }.take(max))
+    }
+
+    /** Log the QSO from the radio's logger fields (needs CALL, SENT and RECV). */
+    fun saveQso() = sendCommand("SAVE")
+
+    /** Clear the radio's logger fields. */
+    fun wipeLogger() = sendCommand("WIPE")
+
     /** Stream one chunk of mic PCM (int16 LE @ 8 kHz mono) while transmitting. */
     fun sendMicAudio(pcm: ByteArray) {
         ws?.send(pcm.toByteString())
@@ -336,6 +413,7 @@ class SbitxClient(
                     // transmitting (on its own mic). Unkey unless PTT is still held.
                     if (wasReconnect && unkeyOnReconnect && !pttHeld) sendRaw("r ")
                     unkeyOnReconnect = false
+                    requestMacroFiles()
                     startAudioPolling()
                 }
             }
@@ -347,6 +425,11 @@ class SbitxClient(
                 }
                 state.value = ConnState.SESSION_ENDED
                 ws?.close(1000, "server quit")
+            }
+            text.startsWith("macros_list") -> {
+                _macroFiles.value = text.removePrefix("macros_list").trim()
+                    .split('|').map { it.trim() }.filter { it.isNotEmpty() }
+                    .distinct().sortedBy { it.lowercase() }
             }
             text.startsWith("RX ") -> { _onAir.value = false; _spectrum.tryEmit(text) }
             text.startsWith("TX ") -> { _onAir.value = true; _spectrum.tryEmit(text) }
@@ -412,6 +495,28 @@ class SbitxClient(
             .replace("&lt;", "<").replace("&gt;", ">")
             .replace("&quot;", "\"").replace("&apos;", "'")
             .replace("&amp;", "&")
+
+        /**
+         * Parse a .mc file the way macros.c macro_load() does: lines starting
+         * with F<n>, then the label up to the first comma, then the macro text.
+         * Comment and malformed lines are skipped; the first definition of a
+         * key wins (that's the one macro_exec() runs).
+         */
+        fun parseMacroFile(body: String): List<MacroKey> {
+            val out = LinkedHashMap<Int, MacroKey>()
+            for (raw in body.lineSequence()) {
+                val line = raw.trimEnd('\r')
+                if (!line.startsWith("F")) continue
+                val keyEnd = line.indexOf(' ').takeIf { it > 1 } ?: continue
+                val key = line.substring(1, keyEnd).toIntOrNull() ?: continue
+                val rest = line.substring(keyEnd).trimStart()
+                val comma = rest.indexOf(',')
+                if (comma < 0) continue
+                if (key !in out) out[key] = MacroKey(key, rest.substring(0, comma).trim().take(30),
+                    rest.substring(comma + 1).trim())
+            }
+            return out.values.sortedBy { it.key }
+        }
 
         /** Remove the firmware's "#X" colour markup. */
         fun stripMarkup(s: String): String = s.replace(Regex("#."), "")
