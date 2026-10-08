@@ -45,7 +45,7 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             VERSION="${GITHUB_REF_NAME}"
           else
-            VERSION="$(git describe --tags --always)"
+            VERSION="$(git describe --tags --always --exclude latest-build)"
           fi
           echo "name=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "code=$(( 100 + ${{ github.run_number }} ))" >> "$GITHUB_OUTPUT"
@@ -57,21 +57,54 @@ jobs:
           -PrelVersion="${{ steps.ver.outputs.name }}"
           -PverCode=${{ steps.ver.outputs.code }}
 
+      # Two copies: a versioned name, and a fixed name so this link always
+      # gets the newest release:
+      #   https://github.com/drexjj/zbitx-remote/releases/latest/download/zBitx-Remote.apk
       - name: Rename APK
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk \
-             "zBitx-Remote-${{ steps.ver.outputs.name }}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "zBitx-Remote-${{ steps.ver.outputs.name }}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "zBitx-Remote.apk"
 
+      # Workflow artifacts are always delivered as a .zip and need a GitHub
+      # login, so they can't be installed straight from a phone. Kept for
+      # reference only - use the releases below for installing.
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: zBitx-Remote-APK
           path: zBitx-Remote-*.apk
 
+      # Tag builds (v*): a normal release, which becomes "Latest".
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: zBitx-Remote-*.apk
+          files: |
+            zBitx-Remote-${{ steps.ver.outputs.name }}.apk
+            zBitx-Remote.apk
           generate_release_notes: true
           name: zBitx Remote ${{ github.ref_name }}
+
+      # Every other push: refresh one rolling pre-release, "latest-build",
+      # so a test build is always one tap away on the phone:
+      #   https://github.com/drexjj/zbitx-remote/releases/download/latest-build/zBitx-Remote.apk
+      - name: Move latest-build tag to this commit
+        if: github.ref_type == 'branch'
+        run: |
+          git tag -f latest-build
+          git push -f origin latest-build
+
+      - name: Publish latest-build pre-release
+        if: github.ref_type == 'branch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-build
+          name: Latest test build (${{ steps.ver.outputs.name }})
+          prerelease: true
+          make_latest: false
+          files: zBitx-Remote.apk
+          body: |
+            Test build ${{ steps.ver.outputs.name }} (build ${{ steps.ver.outputs.code }})
+            from branch ${{ github.ref_name }}, commit ${{ github.sha }}.
+
+            Download zBitx-Remote.apk below on your phone and open it to install or upgrade.
