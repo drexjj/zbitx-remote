@@ -20,7 +20,7 @@ Forked from [vis4573/sbitx-remote](https://github.com/vis4573/sbitx-remote) (VU3
 - ⌨️ **CW / CWR** — decoded text, type-to-send through the radio's keyer, F1–F12 macros, QSO logger (Call / Sent / Rcvd / exchange → Log), WPM and pitch
 - 🗂️ **Macro files** — pick any `.mc` file on the radio (`~/sbitx/web`); CW/CWR and FT8 each remember their own file (defaults CW1 and FT8). Tap a key to send, long-press to preview
 - 🔁 **Auto-reconnect** — rides out Wi-Fi/cellular drops with backoff; if the link dies while keyed, the radio is unkeyed as soon as it comes back
-- 📒 **Logbook** — browse the radio's log (newest first, search by callsign, load older); every mode has a logger row (Call / Sent / Rcvd / exchange or grid) with Log QSO and Wipe
+- 📒 **Logbook** — browse the radio's log (newest first, search by callsign, load older); FT8 and CW both have a logger row (Call / Sent / Rcvd / Grid or exchange) with Log QSO
 - 🔄 **Rotation** — portrait or landscape (knob and PTT move to the right side in landscape); follows the phone's auto-rotate setting
 - 🔢 **Version** shown under the title and on the connect screen
 - 📱 **Background-safe** — a foreground service keeps the session alive with the screen off

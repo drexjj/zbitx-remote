@@ -171,7 +171,7 @@ private fun MacroKeyButton(
 
 /** How the logger row is set up for a mode. */
 enum class LoggerStyle(
-    val defaultRst: String?,      // filled into SENT when a call is entered (null = never)
+    val defaultRst: String?,      // filled into SENT when a call is entered (CW only)
     val extraLabel: String,       // 4th field caption
     val extraField: String,       // radio field it edits
 ) {
@@ -179,10 +179,6 @@ enum class LoggerStyle(
     CW("599", "My exch", "NR"),
     /** FT8: the radio fills CALL/SENT/RECV/EXCH itself; EXCH holds their grid. */
     FT8(null, "Grid", "EXCH"),
-    /** USB/LSB/AM: 59 default; 4th field is what they sent (name, QTH, contest exchange). */
-    VOICE("59", "Their exch", "EXCH"),
-    /** DIGI (other digital modes via the loopback): 599 default, their exchange. */
-    DIGI("599", "Their exch", "EXCH"),
 }
 
 /**
