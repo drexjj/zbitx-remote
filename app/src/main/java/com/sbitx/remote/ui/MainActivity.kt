@@ -372,6 +372,11 @@ fun RadioPanel(client: SbitxClient, service: RadioService, state: ConnState) {
             CwConsole(client) { showLog = true }
             Spacer(Modifier.height(6.dp))
         }
+        // every other mode (USB/LSB/AM/2TONE/DIGI) still gets the QSO logger + logbook
+        if (mode != "?" && mode != "FT8" && mode !in CW_MODES) {
+            LoggerRow(client, if (mode in VOICE_MODES) LoggerStyle.VOICE else LoggerStyle.DIGI) { showLog = true }
+            Spacer(Modifier.height(6.dp))
+        }
 
         // ---- Levels ----
         Row(Modifier.fillMaxWidth()) {
