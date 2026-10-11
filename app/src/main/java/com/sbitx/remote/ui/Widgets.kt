@@ -289,11 +289,24 @@ fun Ft8Console(client: SbitxClient, onOpenLog: () -> Unit = {}) {
     // history lives in the client so it survives rotation and mode switches
     val rows by client.ft8Lines.collectAsState()
     val lastLog by client.lastLogLine.collectAsState()
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (rows.size - 1).coerceAtLeast(0))
     var msg by remember { mutableStateOf("") }
 
-    LaunchedEffect(rows.size, rows.lastOrNull()) {
-        if (rows.isNotEmpty()) listState.animateScrollToItem(rows.size - 1)
+    // All / CQ filter. It's the radio's FT8_FILTER field (shared with the web UI
+    // and front panel); on software without that field it works locally only.
+    var localCqOnly by remember { mutableStateOf(false) }
+    val radioFilter = fields["FT8_FILTER"]
+    val cqOnly = radioFilter?.let { it == "CQ" } ?: localCqOnly
+    val visible = remember(rows, cqOnly, myCall) {
+        if (cqOnly) rows.filter { SbitxClient.keepInCqFilter(it, myCall) } else rows
+    }
+    fun setCqOnly(on: Boolean) {
+        localCqOnly = on
+        if (radioFilter != null) client.setFt8CqOnly(on)
+    }
+
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (visible.size - 1).coerceAtLeast(0))
+    LaunchedEffect(visible.size, visible.lastOrNull(), cqOnly) {
+        if (visible.isNotEmpty()) listState.animateScrollToItem(visible.size - 1)
     }
 
     Column(
@@ -313,9 +326,28 @@ fun Ft8Console(client: SbitxClient, onOpenLog: () -> Unit = {}) {
             Switch(checked = auto, onCheckedChange = { client.setFt8Auto(it) },
                 modifier = Modifier.height(24.dp).padding(start = 4.dp))
         }
-        LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().height(180.dp)) {
-            items(rows.size) { i ->
-                val row = rows[i]
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Show", fontSize = 11.sp)
+            SmallChip("All", selected = !cqOnly) { setCqOnly(false) }
+            SmallChip("CQ only", selected = cqOnly) { setCqOnly(true) }
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (cqOnly) "${visible.size} of ${rows.size}" else "${rows.size}",
+                fontSize = 10.sp, color = Color(0x88FFFFFF)
+            )
+        }
+        if (cqOnly && visible.isEmpty()) {
+            Box(Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
+                Text("No CQ calls yet (your own QSO always shows)", fontSize = 12.sp,
+                    color = Color(0x88FFFFFF))
+            }
+        } else LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().height(180.dp)) {
+            items(visible.size) { i ->
+                val row = visible[i]
                 Text(
                     renderDecorated(row.text, row.kind),
                     fontFamily = FontFamily.Monospace,
@@ -327,7 +359,7 @@ fun Ft8Console(client: SbitxClient, onOpenLog: () -> Unit = {}) {
                         .pointerInput(row) {
                             detectTapGestures(
                                 onTap = {
-                                    val toks = SbitxClient.normalizeFt8(row.text)?.split(' ')
+                                    val toks = SbitxClient.ft8Tokens(row.text)
                                     if (toks != null && toks.getOrNull(6) == myCall) {
                                         // one of ours: re-send it (web UI behaviour)
                                         client.ft8Transmit(toks.drop(5).joinToString(" "))
@@ -374,7 +406,7 @@ fun Ft8Console(client: SbitxClient, onOpenLog: () -> Unit = {}) {
 /** The other station in a decode: the 'R'-styled span, else the sender token. */
 private fun pickCall(text: String, myCall: String): String? {
     decoSpans(text).firstOrNull { it.first == 'R' }?.second?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
-    val toks = SbitxClient.normalizeFt8(text)?.split(' ') ?: return null
+    val toks = SbitxClient.ft8Tokens(text) ?: return null
     // "... ~ CQ [DX] CALL GRID" or "... ~ TO FROM X"
     return when {
         toks[5] == "CQ" && toks.size == 9 -> toks[7]

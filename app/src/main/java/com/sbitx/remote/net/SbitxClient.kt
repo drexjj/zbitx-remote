@@ -310,6 +310,13 @@ class SbitxClient(
 
     fun setFt8Auto(on: Boolean) = setToggle("FT8_AUTO", on)
 
+    /**
+     * FT8 decode filter: true = CQ calls only (plus your own QSO), false = all.
+     * It's the radio's FT8_FILTER field, so it is saved on the radio and shared
+     * with the zBitx web UI and front panel.
+     */
+    fun setFt8CqOnly(cqOnly: Boolean) = sendCommand("FT8_FILTER", if (cqOnly) "CQ" else "ALL")
+
     // ------------------------------------------------------------- macros
     //
     // zBitx macros are N1MM-style .mc files in ~/sbitx/web on the Pi
@@ -634,10 +641,30 @@ class SbitxClient(
          * spaces). Returns null if the line isn't a decode.
          */
         fun normalizeFt8(decodeText: String): String? {
-            val plain = stripMarkup(decodeText).replace(Regex("""[^\w\-~]+"""), " ").trim()
-            val tokens = plain.split(Regex("""\s+"""))
-            if (tokens.size < 7 || tokens.size > 9 || tokens[4] != "~") return null
+            // Keep the real text: turning '/' into a space (as older web UI code
+            // did) split compound calls like PJ4/K1ABC and broke the reply.
+            val tokens = ft8Tokens(decodeText) ?: return null
             return tokens.joinToString(" ")
+        }
+
+        /** Decode split into tokens "time conf snr pitch ~ m1 m2 [m3 [m4]]", or null. */
+        fun ft8Tokens(decodeText: String): List<String>? {
+            val tokens = stripMarkup(decodeText).trim().split(Regex("""\s+"""))
+            if (tokens.size < 7 || tokens.size > 9 || tokens[4] != "~") return null
+            return tokens
+        }
+
+        /**
+         * The "CQ" filter rule, same as the zBitx web UI: keep CQ calls and
+         * anything to you, from you, or queued for you to send.
+         */
+        fun keepInCqFilter(line: Ft8Line, myCall: String): Boolean {
+            if (line.kind == "WSJTX-Q") return true
+            val t = ft8Tokens(line.text) ?: return true     // not a decode: don't hide it
+            val m1 = t[5].uppercase()
+            val m2 = t[6].uppercase()
+            val me = myCall.uppercase()
+            return m1 == "CQ" || (me.isNotEmpty() && (m1 == me || m2 == me))
         }
     }
 }
