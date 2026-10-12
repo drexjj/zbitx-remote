@@ -16,7 +16,7 @@ Forked from [vis4573/sbitx-remote](https://github.com/vis4573/sbitx-remote) (VU3
 - 📶 **Frequency control** — tap a digit then turn the knob, direct kHz entry, VFO A/B, lock, split
 - 🎛️ **zBitx controls** — 80 m–10 m incl. 60 m, USB/LSB/AM/CW/CWR/FT8/DIGI, volume, IF gain, drive, bandwidth, compressor, AGC, ANR / DSP / NOTCH, TUNE
 - 📏 **Meters** — S-meter on receive, forward power and SWR on transmit
-- 📟 **FT8** — colour-coded decodes; **tap a decode and the radio runs the QSO** (same as the zBitx web UI), auto mode, F1–F12 macros from the radio's FT8 macro file, Stop, free-text messages
+- 📟 **FT8** — color-coded decodes; **tap a decode and the radio runs the QSO** (same as the zBitx web UI), auto mode, F1–F12 macros from the radio's FT8 macro file, Stop, free-text messages, CQ only filter
 - ⌨️ **CW / CWR** — decoded text, type-to-send through the radio's keyer, F1–F12 macros, QSO logger (Call / Sent / Rcvd / exchange → Log), WPM and pitch
 - 🗂️ **Macro files** — pick any `.mc` file on the radio (`~/sbitx/web`); CW/CWR and FT8 each remember their own file (defaults CW1 and FT8). Tap a key to send, long-press to preview
 - 🔁 **Auto-reconnect** — rides out Wi-Fi/cellular drops with backoff; if the link dies while keyed, the radio is unkeyed as soon as it comes back
