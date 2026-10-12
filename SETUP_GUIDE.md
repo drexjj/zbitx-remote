@@ -145,7 +145,7 @@ They're saved **on the radio** (the same settings as the front panel's MENU → 
 
 | Item | What it does |
 |---|---|
-| Version | Shown under *zBitx Remote*, e.g. `v1.0.4 (build 112)`. Quote this when reporting problems. |
+| Version | Shown under *zBitx Remote*, e.g. `v1.0.3 (build xxxx)`. Quote this when reporting problems. |
 | Clock | The radio's UTC time. |
 | **Set** | Your callsign and grid (Section 6). |
 | **Log** | Opens the radio's logbook. |
