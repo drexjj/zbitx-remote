@@ -6,6 +6,9 @@ Tune the bands, work SSB with your phone's microphone, run FT8 and CW, and liste
 
 Forked from [vis4573/sbitx-remote](https://github.com/vis4573/sbitx-remote) (VU3UBP) and adapted to the zBitx software ([drexjj/zbitx](https://github.com/drexjj/zbitx)).
 
+📖 **New here?** Follow the [Installation & Setup Guide](SETUP_GUIDE.md).
+
+
 ---
 
 ## ✨ Features
