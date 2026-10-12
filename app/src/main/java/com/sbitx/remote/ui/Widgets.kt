@@ -279,7 +279,7 @@ fun FreqDigits(freq: Long, selectedMult: Long, onSelect: (Long) -> Unit) {
  *  - F1..F12 come from the selected FT8 macro file on the radio.
  */
 @Composable
-fun Ft8Console(client: SbitxClient, onOpenLog: () -> Unit = {}) {
+fun Ft8Console(client: SbitxClient) {
     val fields by client.fields.collectAsState()
     val myCall = (fields["MYCALLSIGN"] ?: "").uppercase()
     val myGrid = (fields["MYGRID"] ?: "").uppercase().take(4)
@@ -385,7 +385,7 @@ fun Ft8Console(client: SbitxClient, onOpenLog: () -> Unit = {}) {
     }
 
     Spacer(Modifier.height(6.dp))
-    LoggerRow(client, LoggerStyle.FT8, onOpenLog)
+    LoggerRow(client, LoggerStyle.FT8)
     Spacer(Modifier.height(6.dp))
     MacroPanel(client, MacroGroup.FT8)
 
@@ -437,7 +437,7 @@ fun Ft8Btn(label: String, enabled: Boolean, danger: Boolean = false, onClick: ()
  * "F<n>") and zBitx keys the transmitter itself.
  */
 @Composable
-fun CwConsole(client: SbitxClient, onOpenLog: () -> Unit = {}) {
+fun CwConsole(client: SbitxClient) {
     val fields by client.fields.collectAsState()
     val segments by client.cwText.collectAsState()      // (isTx, text), kept in the client
     var outgoing by remember { mutableStateOf("") }
@@ -479,7 +479,7 @@ fun CwConsole(client: SbitxClient, onOpenLog: () -> Unit = {}) {
         }
     }
     Spacer(Modifier.height(6.dp))
-    LoggerRow(client, LoggerStyle.CW, onOpenLog)
+    LoggerRow(client, LoggerStyle.CW)
     Spacer(Modifier.height(6.dp))
     MacroPanel(client, MacroGroup.CW)
 }

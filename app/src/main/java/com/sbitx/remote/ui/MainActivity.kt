@@ -365,11 +365,11 @@ fun RadioPanel(client: SbitxClient, service: RadioService, state: ConnState) {
 
         // ---- Mode-specific consoles ----
         if (mode == "FT8") {
-            Ft8Console(client) { showLog = true }
+            Ft8Console(client)
             Spacer(Modifier.height(6.dp))
         }
         if (mode in CW_MODES) {
-            CwConsole(client) { showLog = true }
+            CwConsole(client)
             Spacer(Modifier.height(6.dp))
         }
 

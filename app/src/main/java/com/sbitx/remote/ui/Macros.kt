@@ -189,7 +189,7 @@ enum class LoggerStyle(
  * Log saves the QSO on the radio (it needs Call, Sent and Rcvd).
  */
 @Composable
-fun LoggerRow(client: SbitxClient, style: LoggerStyle = LoggerStyle.CW, onOpenLog: (() -> Unit)? = null) {
+fun LoggerRow(client: SbitxClient, style: LoggerStyle = LoggerStyle.CW) {
     val defaultRst = style.defaultRst
     val fields by client.fields.collectAsState()
     val call = fields["CALL"].orEmpty()
@@ -225,11 +225,6 @@ fun LoggerRow(client: SbitxClient, style: LoggerStyle = LoggerStyle.CW, onOpenLo
                 modifier = Modifier.height(34.dp)) { Text("Wipe", fontSize = 12.sp) }
             Spacer(Modifier.weight(1f))
             if (!canLog) Text("Needs Call, Sent, Rcvd", fontSize = 10.sp, color = Color(0x88FFFFFF))
-            if (onOpenLog != null) {
-                OutlinedButton(onClick = onOpenLog,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                    modifier = Modifier.height(34.dp)) { Text("Logbook", fontSize = 12.sp) }
-            }
         }
     }
 }
