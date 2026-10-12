@@ -394,6 +394,18 @@ class SbitxClient(
     /** Clear the radio's logger fields. */
     fun wipeLogger() = sendCommand("WIPE")
 
+    /**
+     * Set your station callsign (3-10 chars) and grid (4 or 6 chars) on the
+     * radio, the same way the zBitx web UI's settings panel does. The radio
+     * saves them with its other settings and echoes them back as fields.
+     */
+    fun setMyStation(callsign: String, grid: String) {
+        val c = callsign.trim().uppercase().filter { it.isLetterOrDigit() || it == '/' }
+        val g = grid.trim().uppercase().filter { it.isLetterOrDigit() }
+        if (c.length in 3..10) sendCommand("MYCALLSIGN", c)
+        if (g.length == 4 || g.length == 6) sendCommand("MYGRID", g)
+    }
+
     // ------------------------------------------------------------ logbook
     // The radio's SQLite logbook (logbook.c logbook_query()):
     //   "logbook=0 [prefix]"   -> latest 50 QSOs (optionally callsign prefix)

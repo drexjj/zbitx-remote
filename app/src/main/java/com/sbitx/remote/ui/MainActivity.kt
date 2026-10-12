@@ -228,6 +228,7 @@ fun RadioPanel(client: SbitxClient, service: RadioService, state: ConnState) {
     var selectedMult by remember { mutableStateOf(100L) }
     var freqText by remember { mutableStateOf("") }
     var showLog by remember { mutableStateOf(false) }
+    var showStation by remember { mutableStateOf(false) }
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     // ---- Local tuning target: the knob/waterfall move this immediately and a
@@ -255,16 +256,24 @@ fun RadioPanel(client: SbitxClient, service: RadioService, state: ConnState) {
     fun tuneBy(d: Long) = tuneTo((if (target > 0) target else radioFreq) + d)
 
     if (showLog) LogbookDialog(client) { showLog = false }
+    if (showStation) StationDialog(client) { showStation = false }
 
     // ================= HEADER =================
     val header: @Composable () -> Unit = {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("zBitx Remote", style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                Text("zBitx Remote", style = MaterialTheme.typography.titleMedium, maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 Text(appVersion(), fontSize = 10.sp, color = Color(0x88FFFFFF), maxLines = 1)
             }
             Text(fields["STATUS"]?.substringAfter(' ') ?: "", fontSize = 11.sp,
                 color = Color(0x99FFFFFF), modifier = Modifier.padding(end = 6.dp))
+            OutlinedButton(
+                onClick = { showStation = true },
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                modifier = Modifier.height(34.dp)
+            ) { Text("Set", fontSize = 12.sp) }
+            Spacer(Modifier.width(6.dp))
             OutlinedButton(
                 onClick = { showLog = true },
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),

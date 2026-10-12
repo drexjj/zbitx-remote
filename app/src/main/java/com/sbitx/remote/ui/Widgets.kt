@@ -314,7 +314,7 @@ fun Ft8Console(client: SbitxClient) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                if (myCall.isBlank() || myCall == "CALL") "FT8  (set MYCALLSIGN on the radio)"
+                if (myCall.isBlank() || myCall == "CALL") "FT8  (tap Set at the top to enter your callsign)"
                 else "FT8  $myCall $myGrid" + (if (call.isNotBlank()) "  ⇄  $call" else ""),
                 fontSize = 12.sp, color = Color(0xFF81C784), modifier = Modifier.weight(1f)
             )
