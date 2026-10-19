@@ -319,6 +319,7 @@ You will be prompted to type yes and enter a password. The password is hf12345
 ssh pi@zbitx.local
 sudo bash /home/pi/sbitx-remote-setup.sh tskey-auth-XXXXXXXXXXXX
 ```
+Enter the password hf12345
 
 When it finishes, it prints the radio's **Tailscale IP address** (`100.x.y.z`). **Write it down.**
 
