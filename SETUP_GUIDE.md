@@ -307,10 +307,12 @@ From a computer on the same network as the radio (Windows PowerShell, macOS or L
 ```bash
 # 1. Download the script from this repository
 curl -LO https://raw.githubusercontent.com/drexjj/zbitx-remote/main/scripts/sbitx-remote-setup.sh
-
+```
+```bash
 # 2. Copy it to the radio
 scp sbitx-remote-setup.sh pi@zbitx.local:/home/pi/
-
+```
+```bash
 # 3. Log in to the radio and run it with your auth key
 ssh pi@zbitx.local
 sudo bash /home/pi/sbitx-remote-setup.sh tskey-auth-XXXXXXXXXXXX
