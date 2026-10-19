@@ -312,6 +312,8 @@ curl -LO https://raw.githubusercontent.com/drexjj/zbitx-remote/main/scripts/sbit
 # 2. Copy it to the radio
 scp sbitx-remote-setup.sh pi@zbitx.local:/home/pi/
 ```
+You will be prompted to type yes and enter a password. The password is hf12345
+
 ```bash
 # 3. Log in to the radio and run it with your auth key
 ssh pi@zbitx.local
